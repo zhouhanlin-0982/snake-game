@@ -2,7 +2,8 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="mobile-web-app-capable" content="yes" />
   <title>Snake · 贪吃蛇</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -26,9 +27,13 @@
 
     * { box-sizing: border-box; }
     html, body { height: 100%; }
+    html { -webkit-text-size-adjust: 100%; }
     body {
       margin: 0;
       font-family: "Outfit", system-ui, sans-serif;
+      -webkit-tap-highlight-color: transparent;
+      overscroll-behavior: none;
+      touch-action: manipulation;
       background:
         radial-gradient(1200px 600px at 15% -10%, rgba(167, 139, 250, 0.14), transparent 55%),
         radial-gradient(900px 500px at 95% 10%, rgba(52, 211, 153, 0.1), transparent 50%),
@@ -165,6 +170,9 @@
       max-width: min(440px, 100%);
       border: 1px solid rgba(255, 255, 255, 0.06);
       box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+      touch-action: none;
+      user-select: none;
+      -webkit-user-select: none;
     }
     canvas {
       display: block;
@@ -206,6 +214,33 @@
       flex-wrap: wrap;
       gap: 0.5rem;
       justify-content: center;
+    }
+    .overlay-page { width: 100%; max-width: 320px; display: flex; flex-direction: column; align-items: center; }
+    .overlay-page[hidden] { display: none !important; }
+    .diff-grid {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 0.5rem;
+      width: min(280px, 100%);
+      margin-top: 0.25rem;
+    }
+    .diff-grid button {
+      width: 100%;
+      border-radius: var(--radius-sm);
+      padding: 0.75rem 1rem;
+      font-size: 0.95rem;
+    }
+    .diff-grid button[data-diff="easy"] {
+      background: linear-gradient(135deg, #6ee7b7, #34d399);
+      color: #052e1f;
+    }
+    .diff-grid button[data-diff="normal"] {
+      background: linear-gradient(135deg, #c4b5fd, var(--accent));
+      color: #12081f;
+    }
+    .diff-grid button[data-diff="hard"] {
+      background: linear-gradient(135deg, #fda4af, #fb7185);
+      color: #3f0d16;
     }
     .name-row {
       display: flex;
@@ -328,6 +363,50 @@
       color: var(--text);
       margin: 0 0.1rem;
     }
+
+    .touch-pad {
+      display: none;
+      margin-top: 1rem;
+      padding-bottom: max(0.35rem, env(safe-area-inset-bottom, 0px));
+      max-width: min(280px, 100%);
+      margin-left: auto;
+      margin-right: auto;
+      gap: 0.35rem;
+      grid-template-columns: 1fr 1fr 1fr;
+      grid-template-rows: auto auto auto;
+      align-items: stretch;
+      justify-items: stretch;
+    }
+    .touch-btn {
+      min-height: 48px;
+      border-radius: var(--radius-sm);
+      background: var(--glass);
+      border: 1px solid var(--glass-b);
+      color: var(--text);
+      font-size: 1.15rem;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0.5rem;
+    }
+    .touch-btn:active { transform: scale(0.97); }
+    .touch-btn.touch-primary {
+      background: linear-gradient(135deg, #c4b5fd, var(--accent));
+      color: #12081f;
+      border: none;
+      font-size: 0.82rem;
+    }
+    .touch-up { grid-column: 2; grid-row: 1; }
+    .touch-left { grid-column: 1; grid-row: 2; }
+    .touch-pause { grid-column: 2; grid-row: 2; }
+    .touch-right { grid-column: 3; grid-row: 2; }
+    .touch-down { grid-column: 2; grid-row: 3; }
+
+    @media (pointer: coarse), (max-width: 720px) {
+      .touch-pad { display: grid; }
+    }
+    .pill .diff-label { color: var(--accent2); }
   </style>
 </head>
 <body>
@@ -340,6 +419,8 @@
       <div class="toolbar">
         <div class="pill"><span class="dot" aria-hidden="true"></span>得分 <strong id="score">0</strong></div>
         <div class="pill">纪录 <strong id="best">0</strong></div>
+        <div class="pill" id="pillDifficulty" hidden>难度 <strong class="diff-label" id="diffLabel">—</strong></div>
+        <button type="button" class="btn-ghost" id="btnPause">暂停</button>
         <button type="button" class="btn-ghost" id="btnSound" aria-pressed="false">音效：开</button>
         <button type="button" class="btn-primary" id="btnRestart">重新开始</button>
       </div>
@@ -348,17 +429,29 @@
     <div class="game-card">
       <div class="canvas-wrap">
         <canvas id="game" width="400" height="400" aria-label="贪吃蛇游戏画布"></canvas>
-        <div class="overlay" id="overlay" role="dialog" aria-modal="true" aria-labelledby="overlayTitle">
-          <h2 id="overlayTitle">暂停</h2>
-          <p class="sub" id="overlayMsg">按空格继续</p>
-          <div class="overlay-actions" id="overlayDefaultActions">
-            <button type="button" class="btn-primary" id="btnOverlay">继续</button>
+        <div class="overlay visible" id="overlay" role="dialog" aria-modal="true" aria-labelledby="diffTitle">
+          <div class="overlay-page" id="pageDifficulty">
+            <h2 id="diffTitle">选择难度</h2>
+            <p class="sub">简单节奏最慢，困难节奏最快；可随时用「重新开始」重开一局</p>
+            <div class="diff-grid">
+              <button type="button" class="btn-primary" data-diff="easy" id="btnDiffEasy">简单</button>
+              <button type="button" class="btn-primary" data-diff="normal" id="btnDiffNormal">普通</button>
+              <button type="button" class="btn-primary" data-diff="hard" id="btnDiffHard">困难</button>
+            </div>
           </div>
-          <div id="overlayGameOver" style="display: none; width: 100%; align-items: center; flex-direction: column;">
+          <div class="overlay-page" id="pageStandard" hidden>
+            <h2 id="overlayTitle">暂停</h2>
+            <p class="sub" id="overlayMsg">按空格继续</p>
+            <div class="overlay-actions" id="overlayDefaultActions">
+              <button type="button" class="btn-primary" id="btnOverlay">继续</button>
+            </div>
+          </div>
+          <div class="overlay-page" id="overlayGameOver" hidden>
+            <h2 id="overlayTitleGo" style="margin:0 0 0.35rem;font-size:1.35rem;font-weight:600;">游戏结束</h2>
             <p class="sub" id="goScoreLine"></p>
             <div class="name-row">
               <label for="playerName">昵称（上榜用）</label>
-              <input id="playerName" type="text" maxlength="12" placeholder="例如 Nova" autocomplete="off" />
+              <input id="playerName" type="text" maxlength="12" placeholder="例如 Nova" autocomplete="off" enterkeyhint="done" />
             </div>
             <div class="overlay-actions">
               <button type="button" class="btn-primary" id="btnSaveLb">保存成绩</button>
@@ -367,10 +460,18 @@
           </div>
         </div>
       </div>
-      <p class="controls-hint">
+      <div class="touch-pad" id="touchPad" aria-label="方向与暂停">
+        <button type="button" class="touch-btn touch-up" id="touchUp" aria-label="向上">↑</button>
+        <button type="button" class="touch-btn touch-left" id="touchLeft" aria-label="向左">←</button>
+        <button type="button" class="touch-btn touch-primary touch-pause" id="touchPause" aria-label="暂停或继续">暂停</button>
+        <button type="button" class="touch-btn touch-right" id="touchRight" aria-label="向右">→</button>
+        <button type="button" class="touch-btn touch-down" id="touchDown" aria-label="向下">↓</button>
+      </div>
+      <p class="controls-hint" id="controlsHint">
         <span class="kbd">↑</span><span class="kbd">↓</span><span class="kbd">←</span><span class="kbd">→</span> 或
         <span class="kbd">W</span><span class="kbd">A</span><span class="kbd">S</span><span class="kbd">D</span>
         · <span class="kbd">Space</span> 暂停 · <span class="kbd">R</span> 重开
+        <span id="controlsHintTouch" hidden><br />手机上可用下方方向键与暂停键</span>
       </p>
     </div>
 
@@ -403,7 +504,18 @@
   const overlayDefaultActions = document.getElementById("overlayDefaultActions");
   const btnOverlay = document.getElementById("btnOverlay");
   const btnRestart = document.getElementById("btnRestart");
+  const btnPause = document.getElementById("btnPause");
   const btnSound = document.getElementById("btnSound");
+  const pageDifficulty = document.getElementById("pageDifficulty");
+  const pageStandard = document.getElementById("pageStandard");
+  const pillDifficulty = document.getElementById("pillDifficulty");
+  const diffLabel = document.getElementById("diffLabel");
+  const controlsHintTouch = document.getElementById("controlsHintTouch");
+  const touchUp = document.getElementById("touchUp");
+  const touchDown = document.getElementById("touchDown");
+  const touchLeft = document.getElementById("touchLeft");
+  const touchRight = document.getElementById("touchRight");
+  const touchPause = document.getElementById("touchPause");
   const lbBody = document.getElementById("lbBody");
   const lbEmpty = document.getElementById("lbEmpty");
   const lbTable = document.getElementById("lbTable");
@@ -421,8 +533,18 @@
   const LB_KEY = "snake-leaderboard-v2";
   const MUTE_KEY = "snake-sound-muted";
 
+  /** 初始间隔 ms（越小越快）、最快速度下限、每吃一个加快的步长 */
+  const DIFF = {
+    easy: { start: 200, min: 105, step: 1 },
+    normal: { start: 130, min: 72, step: 2 },
+    hard: { start: 82, min: 42, step: 3 },
+  };
+  const DIFF_NAMES = { easy: "简单", normal: "普通", hard: "困难" };
+
   let snake, dir, nextDir, food, score, tickMs, lastTick;
   let running, paused, gameOver;
+  let difficultyChosen = false;
+  let currentDifficulty = "normal";
   let soundMuted = localStorage.getItem(MUTE_KEY) === "1";
   let audioCtx = null;
   let pendingLbScore = null;
@@ -559,37 +681,69 @@
     return { x, y };
   }
 
-  function setOverlayMode(mode) {
-    overlayDefaultActions.style.display = mode === "gameover" ? "none" : "flex";
-    overlayMsg.style.display = mode === "gameover" ? "none" : "block";
-    overlayGameOver.style.display = mode === "gameover" ? "flex" : "none";
+  function showPageDifficulty() {
+    pageDifficulty.hidden = false;
+    pageStandard.hidden = true;
+    overlayGameOver.hidden = true;
+    overlay.classList.add("visible");
   }
 
-  function showOverlay(title, msg, kind) {
+  function showOverlay(title, msg) {
     overlayTitle.textContent = title;
     overlayMsg.textContent = msg;
-    btnOverlay.style.display = kind === "pause" ? "inline-flex" : "none";
-    setOverlayMode(kind === "gameover" ? "gameover" : "normal");
+    btnOverlay.style.display = "inline-flex";
+    pageDifficulty.hidden = true;
+    overlayGameOver.hidden = true;
+    pageStandard.hidden = false;
+    overlay.classList.add("visible");
+  }
+
+  function showGameOverPage() {
+    pageDifficulty.hidden = true;
+    pageStandard.hidden = true;
+    overlayGameOver.hidden = false;
     overlay.classList.add("visible");
   }
 
   function hideOverlay() {
     overlay.classList.remove("visible");
-    setOverlayMode("normal");
+    pageDifficulty.hidden = true;
+    pageStandard.hidden = true;
+    overlayGameOver.hidden = true;
     overlayMsg.style.display = "block";
     overlayDefaultActions.style.display = "flex";
     pendingLbScore = null;
+  }
+
+  function tickCfg() {
+    return DIFF[currentDifficulty] || DIFF.normal;
+  }
+
+  function syncPauseLabels() {
+    const t = paused ? "继续" : "暂停";
+    btnPause.textContent = t;
+    touchPause.textContent = t;
+    touchPause.setAttribute("aria-label", paused ? "继续游戏" : "暂停游戏");
+  }
+
+  function syncTouchHint() {
+    const mq = window.matchMedia("(pointer: coarse), (max-width: 720px)");
+    controlsHintTouch.hidden = !mq.matches;
   }
 
   function openGameOver(reason) {
     saveBest();
     sfxDie();
     pendingLbScore = score;
-    overlayTitle.textContent = "游戏结束";
     goScoreLine.textContent = reason + " · 本局 " + score + " 分";
     playerName.value = localStorage.getItem("snake-last-name") || "";
-    showOverlay("游戏结束", "", "gameover");
-    playerName.focus();
+    showGameOverPage();
+    syncPauseLabels();
+    try {
+      playerName.focus({ preventScroll: true });
+    } catch {
+      playerName.focus();
+    }
   }
 
   function submitLeaderboard() {
@@ -611,6 +765,15 @@
     resetGame();
   }
 
+  function pickDifficulty(key) {
+    if (!DIFF[key]) return;
+    currentDifficulty = key;
+    difficultyChosen = true;
+    pillDifficulty.hidden = false;
+    diffLabel.textContent = DIFF_NAMES[key];
+    resetGame();
+  }
+
   function resetGame() {
     snake = [
       { x: 8, y: 10 },
@@ -620,16 +783,28 @@
     dir = { x: 1, y: 0 };
     nextDir = { ...dir };
     score = 0;
-    tickMs = 130;
-    running = true;
     paused = false;
     gameOver = false;
     food = emptyCell();
     scoreEl.textContent = "0";
+
+    if (!difficultyChosen) {
+      tickMs = DIFF.normal.start;
+      running = false;
+      showPageDifficulty();
+      loadBest();
+      syncPauseLabels();
+      return;
+    }
+
+    const cfg = tickCfg();
+    tickMs = cfg.start;
+    running = true;
     hideOverlay();
     lastTick = performance.now();
     loadBest();
     sfxStart();
+    syncPauseLabels();
   }
 
   function opposite(a, b) {
@@ -665,7 +840,8 @@
       score += 10;
       scoreEl.textContent = String(score);
       food = emptyCell();
-      tickMs = Math.max(70, tickMs - 2);
+      const cfg = tickCfg();
+      tickMs = Math.max(cfg.min, tickMs - cfg.step);
       sfxEat();
     } else {
       snake.pop();
@@ -734,6 +910,24 @@
     draw();
   }
 
+  function trySetDirection(nd) {
+    if (!difficultyChosen || gameOver || !running) return;
+    if (paused) return;
+    if (!opposite(nd, dir)) nextDir = nd;
+  }
+
+  function togglePause() {
+    if (!difficultyChosen || gameOver || !running) return;
+    paused = !paused;
+    if (paused) {
+      sfxPause();
+      showOverlay("已暂停", "按空格、工具栏或下方按钮继续");
+    } else {
+      hideOverlay();
+    }
+    syncPauseLabels();
+  }
+
   function onKey(e) {
     const lk = e.key.toLowerCase();
     const map = {
@@ -747,29 +941,46 @@
       d: { x: 1, y: 0 },
     };
     if (lk === " " || lk === "spacebar") {
+      if (gameOver && document.activeElement === playerName) return;
       e.preventDefault();
       if (gameOver) return;
-      paused = !paused;
-      if (paused) {
-        sfxPause();
-        showOverlay("已暂停", "按空格或点击继续", "pause");
-      } else hideOverlay();
+      if (!difficultyChosen) return;
+      togglePause();
       return;
     }
     if (lk === "r") {
+      e.preventDefault();
       resetGame();
       return;
     }
     const nd = map[lk] || map[e.key];
     if (!nd) return;
     e.preventDefault();
-    if (!gameOver && !opposite(nd, dir)) nextDir = nd;
+    trySetDirection(nd);
+  }
+
+  function bindDirButton(el, vec) {
+    el.addEventListener(
+      "pointerdown",
+      (ev) => {
+        if (ev.pointerType === "mouse" && ev.button !== 0) return;
+        ev.preventDefault();
+        resumeAudio();
+        trySetDirection(vec);
+      },
+      { passive: false }
+    );
   }
 
   btnRestart.addEventListener("click", () => resetGame());
+  btnPause.addEventListener("click", () => {
+    resumeAudio();
+    togglePause();
+  });
   btnOverlay.addEventListener("click", () => {
     paused = false;
     hideOverlay();
+    syncPauseLabels();
   });
   btnSound.addEventListener("click", () => {
     soundMuted = !soundMuted;
@@ -787,7 +998,30 @@
     }
   });
 
+  document.querySelectorAll("[data-diff]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      resumeAudio();
+      pickDifficulty(btn.getAttribute("data-diff"));
+    });
+  });
+
+  bindDirButton(touchUp, { x: 0, y: -1 });
+  bindDirButton(touchDown, { x: 0, y: 1 });
+  bindDirButton(touchLeft, { x: -1, y: 0 });
+  bindDirButton(touchRight, { x: 1, y: 0 });
+  touchPause.addEventListener(
+    "pointerdown",
+    (ev) => {
+      if (ev.pointerType === "mouse" && ev.button !== 0) return;
+      ev.preventDefault();
+      resumeAudio();
+      togglePause();
+    },
+    { passive: false }
+  );
+
   window.addEventListener("keydown", onKey);
+  window.addEventListener("resize", syncTouchHint);
   ["click", "touchstart"].forEach((ev) => {
     document.body.addEventListener(ev, () => resumeAudio(), { passive: true });
   });
@@ -806,6 +1040,8 @@
 
   syncSoundButton();
   renderLeaderboard();
+  syncTouchHint();
+  syncPauseLabels();
   resetGame();
   requestAnimationFrame(loop);
 })();
