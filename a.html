@@ -1,0 +1,814 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Snake · 贪吃蛇</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg0: #07080c;
+      --bg1: #0d0f14;
+      --glass: rgba(255, 255, 255, 0.045);
+      --glass-b: rgba(255, 255, 255, 0.09);
+      --text: #f4f6fa;
+      --muted: #8b919d;
+      --accent: #a78bfa;
+      --accent2: #34d399;
+      --danger: #fb7185;
+      --canvas-bg: #0c0e14;
+      --shadow: 0 24px 80px rgba(0, 0, 0, 0.55);
+      --radius: 20px;
+      --radius-sm: 12px;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { height: 100%; }
+    body {
+      margin: 0;
+      font-family: "Outfit", system-ui, sans-serif;
+      background:
+        radial-gradient(1200px 600px at 15% -10%, rgba(167, 139, 250, 0.14), transparent 55%),
+        radial-gradient(900px 500px at 95% 10%, rgba(52, 211, 153, 0.1), transparent 50%),
+        linear-gradient(165deg, var(--bg0), var(--bg1));
+      color: var(--text);
+      min-height: 100%;
+      padding: clamp(1rem, 3vw, 2rem);
+    }
+
+    .shell {
+      max-width: 1120px;
+      margin: 0 auto;
+      display: grid;
+      grid-template-columns: 1fr minmax(260px, 320px);
+      gap: clamp(1rem, 2vw, 1.75rem);
+      align-items: start;
+    }
+    @media (max-width: 900px) {
+      .shell { grid-template-columns: 1fr; }
+    }
+
+    header {
+      grid-column: 1 / -1;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: flex-end;
+      justify-content: space-between;
+      gap: 1rem;
+      margin-bottom: 0.25rem;
+    }
+    .brand {
+      display: flex;
+      flex-direction: column;
+      gap: 0.35rem;
+    }
+    .brand h1 {
+      margin: 0;
+      font-weight: 600;
+      font-size: clamp(1.75rem, 4vw, 2.35rem);
+      letter-spacing: -0.03em;
+      line-height: 1.1;
+    }
+    .brand p {
+      margin: 0;
+      color: var(--muted);
+      font-weight: 400;
+      font-size: 0.95rem;
+      letter-spacing: 0.02em;
+    }
+
+    .toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+      align-items: center;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.5rem 0.85rem;
+      border-radius: 999px;
+      background: var(--glass);
+      border: 1px solid var(--glass-b);
+      font-size: 0.82rem;
+      color: var(--muted);
+      font-weight: 500;
+    }
+    .pill strong {
+      color: var(--text);
+      font-weight: 600;
+      font-variant-numeric: tabular-nums;
+    }
+    .pill .dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--accent2);
+      box-shadow: 0 0 12px var(--accent2);
+    }
+
+    button {
+      font-family: inherit;
+      cursor: pointer;
+      border: none;
+      border-radius: 999px;
+      padding: 0.55rem 1.15rem;
+      font-size: 0.82rem;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+      transition: transform 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+    }
+    button:active { transform: scale(0.97); }
+    .btn-primary {
+      background: linear-gradient(135deg, #c4b5fd, var(--accent));
+      color: #12081f;
+      box-shadow: 0 12px 28px rgba(167, 139, 250, 0.35);
+    }
+    .btn-primary:hover {
+      box-shadow: 0 14px 36px rgba(167, 139, 250, 0.45);
+    }
+    .btn-ghost {
+      background: var(--glass);
+      color: var(--text);
+      border: 1px solid var(--glass-b);
+    }
+    .btn-ghost:hover { border-color: rgba(255, 255, 255, 0.22); }
+
+    .game-card {
+      background: var(--glass);
+      border: 1px solid var(--glass-b);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(18px);
+      -webkit-backdrop-filter: blur(18px);
+      padding: clamp(1rem, 2vw, 1.35rem);
+      position: relative;
+      overflow: hidden;
+    }
+    .game-card::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background: radial-gradient(600px 240px at 20% 0%, rgba(167, 139, 250, 0.08), transparent 60%);
+      pointer-events: none;
+    }
+
+    .canvas-wrap {
+      position: relative;
+      border-radius: var(--radius-sm);
+      overflow: hidden;
+      margin: 0 auto;
+      max-width: min(440px, 100%);
+      border: 1px solid rgba(255, 255, 255, 0.06);
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+    }
+    canvas {
+      display: block;
+      width: 100%;
+      height: auto;
+      vertical-align: middle;
+      background: var(--canvas-bg);
+    }
+
+    .overlay {
+      position: absolute;
+      inset: 0;
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 1.25rem;
+      text-align: center;
+      background: rgba(7, 8, 12, 0.72);
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
+    }
+    .overlay.visible { display: flex; }
+    .overlay h2 {
+      margin: 0 0 0.35rem;
+      font-size: 1.35rem;
+      font-weight: 600;
+      letter-spacing: -0.02em;
+    }
+    .overlay .sub {
+      margin: 0 0 1rem;
+      color: var(--muted);
+      font-size: 0.92rem;
+      line-height: 1.45;
+      max-width: 280px;
+    }
+    .overlay-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+      justify-content: center;
+    }
+    .name-row {
+      display: flex;
+      flex-direction: column;
+      gap: 0.45rem;
+      margin-bottom: 1rem;
+      width: min(280px, 100%);
+      text-align: left;
+    }
+    .name-row label {
+      font-size: 0.72rem;
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      color: var(--muted);
+      font-weight: 600;
+    }
+    .name-row input {
+      width: 100%;
+      border-radius: var(--radius-sm);
+      border: 1px solid var(--glass-b);
+      background: rgba(0, 0, 0, 0.35);
+      color: var(--text);
+      padding: 0.65rem 0.85rem;
+      font-family: inherit;
+      font-size: 0.95rem;
+      outline: none;
+    }
+    .name-row input:focus {
+      border-color: rgba(167, 139, 250, 0.55);
+      box-shadow: 0 0 0 3px rgba(167, 139, 250, 0.15);
+    }
+
+    .side {
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+    }
+
+    .panel {
+      background: var(--glass);
+      border: 1px solid var(--glass-b);
+      border-radius: var(--radius);
+      backdrop-filter: blur(18px);
+      -webkit-backdrop-filter: blur(18px);
+      padding: 1.15rem 1.2rem;
+      box-shadow: var(--shadow);
+    }
+    .panel-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 0.85rem;
+    }
+    .panel-head h3 {
+      margin: 0;
+      font-size: 0.78rem;
+      font-weight: 600;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+    .panel-head span {
+      font-size: 0.75rem;
+      color: var(--muted);
+    }
+
+    .lb-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.88rem;
+    }
+    .lb-table th {
+      text-align: left;
+      font-weight: 500;
+      color: var(--muted);
+      padding: 0.35rem 0;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+      font-size: 0.72rem;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+    .lb-table td {
+      padding: 0.55rem 0;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+      font-variant-numeric: tabular-nums;
+    }
+    .lb-table tr:last-child td { border-bottom: none; }
+    .rank {
+      width: 2rem;
+      color: var(--muted);
+      font-weight: 500;
+    }
+    .rank.top { color: var(--accent2); }
+    .player { font-weight: 500; }
+    .pts { text-align: right; font-weight: 600; color: var(--text); }
+    .lb-empty {
+      margin: 0;
+      padding: 1.25rem 0;
+      text-align: center;
+      color: var(--muted);
+      font-size: 0.88rem;
+    }
+
+    .controls-hint {
+      margin: 1rem 0 0;
+      font-size: 0.78rem;
+      color: var(--muted);
+      line-height: 1.55;
+      text-align: center;
+      letter-spacing: 0.03em;
+    }
+    .kbd {
+      display: inline-block;
+      padding: 0.12rem 0.45rem;
+      border-radius: 6px;
+      border: 1px solid var(--glass-b);
+      background: rgba(0, 0, 0, 0.25);
+      font-size: 0.72rem;
+      font-weight: 600;
+      color: var(--text);
+      margin: 0 0.1rem;
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <header>
+      <div class="brand">
+        <h1>贪吃蛇</h1>
+        <p>极简节奏 · 本地排行 · 即时音效</p>
+      </div>
+      <div class="toolbar">
+        <div class="pill"><span class="dot" aria-hidden="true"></span>得分 <strong id="score">0</strong></div>
+        <div class="pill">纪录 <strong id="best">0</strong></div>
+        <button type="button" class="btn-ghost" id="btnSound" aria-pressed="false">音效：开</button>
+        <button type="button" class="btn-primary" id="btnRestart">重新开始</button>
+      </div>
+    </header>
+
+    <div class="game-card">
+      <div class="canvas-wrap">
+        <canvas id="game" width="400" height="400" aria-label="贪吃蛇游戏画布"></canvas>
+        <div class="overlay" id="overlay" role="dialog" aria-modal="true" aria-labelledby="overlayTitle">
+          <h2 id="overlayTitle">暂停</h2>
+          <p class="sub" id="overlayMsg">按空格继续</p>
+          <div class="overlay-actions" id="overlayDefaultActions">
+            <button type="button" class="btn-primary" id="btnOverlay">继续</button>
+          </div>
+          <div id="overlayGameOver" style="display: none; width: 100%; align-items: center; flex-direction: column;">
+            <p class="sub" id="goScoreLine"></p>
+            <div class="name-row">
+              <label for="playerName">昵称（上榜用）</label>
+              <input id="playerName" type="text" maxlength="12" placeholder="例如 Nova" autocomplete="off" />
+            </div>
+            <div class="overlay-actions">
+              <button type="button" class="btn-primary" id="btnSaveLb">保存成绩</button>
+              <button type="button" class="btn-ghost" id="btnSkipLb">跳过</button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <p class="controls-hint">
+        <span class="kbd">↑</span><span class="kbd">↓</span><span class="kbd">←</span><span class="kbd">→</span> 或
+        <span class="kbd">W</span><span class="kbd">A</span><span class="kbd">S</span><span class="kbd">D</span>
+        · <span class="kbd">Space</span> 暂停 · <span class="kbd">R</span> 重开
+      </p>
+    </div>
+
+    <aside class="side">
+      <div class="panel">
+        <div class="panel-head">
+          <h3>排行榜</h3>
+          <span>TOP 10 · 本机</span>
+        </div>
+        <table class="lb-table" id="lbTable" aria-label="本地排行榜">
+          <thead>
+            <tr><th>#</th><th>玩家</th><th style="text-align:right">分数</th></tr>
+          </thead>
+          <tbody id="lbBody"></tbody>
+        </table>
+        <p class="lb-empty" id="lbEmpty" style="display:none;">暂无记录<br />结束一局即可上榜</p>
+      </div>
+    </aside>
+  </div>
+
+  <script>
+(function () {
+  const canvas = document.getElementById("game");
+  const ctx = canvas.getContext("2d");
+  const scoreEl = document.getElementById("score");
+  const bestEl = document.getElementById("best");
+  const overlay = document.getElementById("overlay");
+  const overlayTitle = document.getElementById("overlayTitle");
+  const overlayMsg = document.getElementById("overlayMsg");
+  const overlayDefaultActions = document.getElementById("overlayDefaultActions");
+  const btnOverlay = document.getElementById("btnOverlay");
+  const btnRestart = document.getElementById("btnRestart");
+  const btnSound = document.getElementById("btnSound");
+  const lbBody = document.getElementById("lbBody");
+  const lbEmpty = document.getElementById("lbEmpty");
+  const lbTable = document.getElementById("lbTable");
+  const overlayGameOver = document.getElementById("overlayGameOver");
+  const goScoreLine = document.getElementById("goScoreLine");
+  const playerName = document.getElementById("playerName");
+  const btnSaveLb = document.getElementById("btnSaveLb");
+  const btnSkipLb = document.getElementById("btnSkipLb");
+
+  const COLS = 20;
+  const ROWS = 20;
+  const CELL = canvas.width / COLS;
+
+  const BEST_KEY = "snake-best-score";
+  const LB_KEY = "snake-leaderboard-v2";
+  const MUTE_KEY = "snake-sound-muted";
+
+  let snake, dir, nextDir, food, score, tickMs, lastTick;
+  let running, paused, gameOver;
+  let soundMuted = localStorage.getItem(MUTE_KEY) === "1";
+  let audioCtx = null;
+  let pendingLbScore = null;
+
+  function syncSoundButton() {
+    btnSound.textContent = soundMuted ? "音效：关" : "音效：开";
+    btnSound.setAttribute("aria-pressed", soundMuted ? "true" : "false");
+  }
+
+  function getAudio() {
+    if (!audioCtx) {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return null;
+      audioCtx = new AC();
+    }
+    return audioCtx;
+  }
+
+  function resumeAudio() {
+    const ctx = getAudio();
+    if (ctx && ctx.state === "suspended") ctx.resume().catch(() => {});
+  }
+
+  function playTone(freq, dur, vol, type) {
+    if (soundMuted) return;
+    const ctx = getAudio();
+    if (!ctx) return;
+    const t0 = ctx.currentTime;
+    const osc = ctx.createOscillator();
+    const g = ctx.createGain();
+    osc.type = type || "sine";
+    osc.frequency.setValueAtTime(freq, t0);
+    g.gain.setValueAtTime(vol, t0);
+    g.gain.exponentialRampToValueAtTime(0.0008, t0 + dur);
+    osc.connect(g);
+    g.connect(ctx.destination);
+    osc.start(t0);
+    osc.stop(t0 + dur + 0.02);
+  }
+
+  function sfxEat() {
+    resumeAudio();
+    playTone(520, 0.05, 0.06, "triangle");
+    setTimeout(() => playTone(784, 0.07, 0.06, "triangle"), 45);
+  }
+
+  function sfxDie() {
+    resumeAudio();
+    playTone(185, 0.12, 0.09, "sawtooth");
+    setTimeout(() => playTone(95, 0.22, 0.1, "sawtooth"), 90);
+  }
+
+  function sfxPause() {
+    resumeAudio();
+    playTone(330, 0.06, 0.04, "sine");
+  }
+
+  function sfxStart() {
+    resumeAudio();
+    playTone(440, 0.06, 0.045, "sine");
+    setTimeout(() => playTone(554, 0.08, 0.045, "sine"), 70);
+  }
+
+  function loadLeaderboard() {
+    try {
+      const raw = localStorage.getItem(LB_KEY);
+      const arr = raw ? JSON.parse(raw) : [];
+      return Array.isArray(arr) ? arr : [];
+    } catch {
+      return [];
+    }
+  }
+
+  function saveLeaderboard(rows) {
+    localStorage.setItem(LB_KEY, JSON.stringify(rows.slice(0, 10)));
+  }
+
+  function renderLeaderboard() {
+    const rows = loadLeaderboard()
+      .filter((r) => r && typeof r.score === "number")
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 10);
+
+    lbBody.textContent = "";
+    if (!rows.length) {
+      lbTable.style.display = "none";
+      lbEmpty.style.display = "block";
+      return;
+    }
+    lbTable.style.display = "table";
+    lbEmpty.style.display = "none";
+
+    rows.forEach((r, i) => {
+      const tr = document.createElement("tr");
+      const rankTd = document.createElement("td");
+      rankTd.className = "rank" + (i < 3 ? " top" : "");
+      rankTd.textContent = String(i + 1);
+      const nameTd = document.createElement("td");
+      nameTd.className = "player";
+      nameTd.textContent = String(r.name || "匿名").slice(0, 12);
+      const scTd = document.createElement("td");
+      scTd.className = "pts";
+      scTd.textContent = String(r.score);
+      tr.append(rankTd, nameTd, scTd);
+      lbBody.appendChild(tr);
+    });
+  }
+
+  function loadBest() {
+    const v = parseInt(localStorage.getItem(BEST_KEY) || "0", 10);
+    bestEl.textContent = Number.isFinite(v) ? v : 0;
+  }
+
+  function saveBest() {
+    const best = parseInt(bestEl.textContent, 10) || 0;
+    if (score > best) {
+      bestEl.textContent = String(score);
+      localStorage.setItem(BEST_KEY, String(score));
+    }
+  }
+
+  function randInt(n) {
+    return Math.floor(Math.random() * n);
+  }
+
+  function emptyCell() {
+    const occupied = new Set(snake.map((s) => s.x + "," + s.y));
+    let x, y, guard = 0;
+    do {
+      x = randInt(COLS);
+      y = randInt(ROWS);
+      guard++;
+    } while (occupied.has(x + "," + y) && guard < COLS * ROWS * 2);
+    return { x, y };
+  }
+
+  function setOverlayMode(mode) {
+    overlayDefaultActions.style.display = mode === "gameover" ? "none" : "flex";
+    overlayMsg.style.display = mode === "gameover" ? "none" : "block";
+    overlayGameOver.style.display = mode === "gameover" ? "flex" : "none";
+  }
+
+  function showOverlay(title, msg, kind) {
+    overlayTitle.textContent = title;
+    overlayMsg.textContent = msg;
+    btnOverlay.style.display = kind === "pause" ? "inline-flex" : "none";
+    setOverlayMode(kind === "gameover" ? "gameover" : "normal");
+    overlay.classList.add("visible");
+  }
+
+  function hideOverlay() {
+    overlay.classList.remove("visible");
+    setOverlayMode("normal");
+    overlayMsg.style.display = "block";
+    overlayDefaultActions.style.display = "flex";
+    pendingLbScore = null;
+  }
+
+  function openGameOver(reason) {
+    saveBest();
+    sfxDie();
+    pendingLbScore = score;
+    overlayTitle.textContent = "游戏结束";
+    goScoreLine.textContent = reason + " · 本局 " + score + " 分";
+    playerName.value = localStorage.getItem("snake-last-name") || "";
+    showOverlay("游戏结束", "", "gameover");
+    playerName.focus();
+  }
+
+  function submitLeaderboard() {
+    if (pendingLbScore == null) return;
+    const name = (playerName.value || "匿名").trim() || "匿名";
+    localStorage.setItem("snake-last-name", name.slice(0, 12));
+    const row = { name: name.slice(0, 12), score: pendingLbScore, ts: Date.now() };
+    const rows = loadLeaderboard();
+    rows.push(row);
+    rows.sort((a, b) => b.score - a.score);
+    saveLeaderboard(rows);
+    renderLeaderboard();
+    pendingLbScore = null;
+    resetGame();
+  }
+
+  function skipLeaderboard() {
+    pendingLbScore = null;
+    resetGame();
+  }
+
+  function resetGame() {
+    snake = [
+      { x: 8, y: 10 },
+      { x: 7, y: 10 },
+      { x: 6, y: 10 },
+    ];
+    dir = { x: 1, y: 0 };
+    nextDir = { ...dir };
+    score = 0;
+    tickMs = 130;
+    running = true;
+    paused = false;
+    gameOver = false;
+    food = emptyCell();
+    scoreEl.textContent = "0";
+    hideOverlay();
+    lastTick = performance.now();
+    loadBest();
+    sfxStart();
+  }
+
+  function opposite(a, b) {
+    return a.x === -b.x && a.y === -b.y;
+  }
+
+  function step() {
+    if (!running || paused || gameOver) return;
+
+    dir = { ...nextDir };
+    const head = snake[0];
+    const nh = { x: head.x + dir.x, y: head.y + dir.y };
+
+    if (nh.x < 0 || nh.x >= COLS || nh.y < 0 || nh.y >= ROWS) {
+      gameOver = true;
+      openGameOver("撞墙");
+      return;
+    }
+
+    const eating = nh.x === food.x && nh.y === food.y;
+    const bodyCheck = eating ? snake : snake.slice(0, -1);
+    for (let i = 0; i < bodyCheck.length; i++) {
+      if (bodyCheck[i].x === nh.x && bodyCheck[i].y === nh.y) {
+        gameOver = true;
+        openGameOver("咬到自己");
+        return;
+      }
+    }
+
+    snake.unshift(nh);
+
+    if (eating) {
+      score += 10;
+      scoreEl.textContent = String(score);
+      food = emptyCell();
+      tickMs = Math.max(70, tickMs - 2);
+      sfxEat();
+    } else {
+      snake.pop();
+    }
+  }
+
+  function drawGrid() {
+    ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue("--canvas-bg").trim() || "#0c0e14";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.strokeStyle = "rgba(255,255,255,0.035)";
+    ctx.lineWidth = 1;
+    for (let x = 0; x <= COLS; x++) {
+      ctx.beginPath();
+      ctx.moveTo(x * CELL + 0.5, 0);
+      ctx.lineTo(x * CELL + 0.5, canvas.height);
+      ctx.stroke();
+    }
+    for (let y = 0; y <= ROWS; y++) {
+      ctx.beginPath();
+      ctx.moveTo(0, y * CELL + 0.5);
+      ctx.lineTo(canvas.width, y * CELL + 0.5);
+      ctx.stroke();
+    }
+  }
+
+  function drawCell(x, y, color, pad) {
+    ctx.fillStyle = color;
+    const px = x * CELL + pad;
+    const py = y * CELL + pad;
+    const s = CELL - pad * 2;
+    const r = Math.min(7, s * 0.28);
+    ctx.beginPath();
+    ctx.roundRect(px, py, s, s, r);
+    ctx.fill();
+  }
+
+  function draw() {
+    drawGrid();
+    drawCell(food.x, food.y, "#fb7185", 3);
+    for (let i = snake.length - 1; i >= 0; i--) {
+      const seg = snake[i];
+      const isHead = i === 0;
+      drawCell(seg.x, seg.y, isHead ? "#6ee7b7" : "#34d399", isHead ? 2 : 3);
+    }
+  }
+
+  function loop(now) {
+    requestAnimationFrame(loop);
+    if (!running) {
+      draw();
+      return;
+    }
+    if (gameOver) {
+      draw();
+      return;
+    }
+    if (paused) {
+      draw();
+      return;
+    }
+    while (now - lastTick >= tickMs) {
+      lastTick += tickMs;
+      step();
+      if (gameOver) break;
+    }
+    draw();
+  }
+
+  function onKey(e) {
+    const lk = e.key.toLowerCase();
+    const map = {
+      arrowup: { x: 0, y: -1 },
+      arrowdown: { x: 0, y: 1 },
+      arrowleft: { x: -1, y: 0 },
+      arrowright: { x: 1, y: 0 },
+      w: { x: 0, y: -1 },
+      s: { x: 0, y: 1 },
+      a: { x: -1, y: 0 },
+      d: { x: 1, y: 0 },
+    };
+    if (lk === " " || lk === "spacebar") {
+      e.preventDefault();
+      if (gameOver) return;
+      paused = !paused;
+      if (paused) {
+        sfxPause();
+        showOverlay("已暂停", "按空格或点击继续", "pause");
+      } else hideOverlay();
+      return;
+    }
+    if (lk === "r") {
+      resetGame();
+      return;
+    }
+    const nd = map[lk] || map[e.key];
+    if (!nd) return;
+    e.preventDefault();
+    if (!gameOver && !opposite(nd, dir)) nextDir = nd;
+  }
+
+  btnRestart.addEventListener("click", () => resetGame());
+  btnOverlay.addEventListener("click", () => {
+    paused = false;
+    hideOverlay();
+  });
+  btnSound.addEventListener("click", () => {
+    soundMuted = !soundMuted;
+    localStorage.setItem(MUTE_KEY, soundMuted ? "1" : "0");
+    syncSoundButton();
+    if (!soundMuted) resumeAudio();
+  });
+  btnSaveLb.addEventListener("click", submitLeaderboard);
+  btnSkipLb.addEventListener("click", skipLeaderboard);
+
+  playerName.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      submitLeaderboard();
+    }
+  });
+
+  window.addEventListener("keydown", onKey);
+  ["click", "touchstart"].forEach((ev) => {
+    document.body.addEventListener(ev, () => resumeAudio(), { passive: true });
+  });
+
+  if (!CanvasRenderingContext2D.prototype.roundRect) {
+    CanvasRenderingContext2D.prototype.roundRect = function (x, y, w, h, r) {
+      const rr = Math.min(r, w / 2, h / 2);
+      this.moveTo(x + rr, y);
+      this.arcTo(x + w, y, x + w, y + h, rr);
+      this.arcTo(x + w, y + h, x, y + h, rr);
+      this.arcTo(x, y + h, x, y, rr);
+      this.arcTo(x, y, x + w, y, rr);
+      this.closePath();
+    };
+  }
+
+  syncSoundButton();
+  renderLeaderboard();
+  resetGame();
+  requestAnimationFrame(loop);
+})();
+  </script>
+</body>
+</html>
