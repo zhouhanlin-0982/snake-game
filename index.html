@@ -164,21 +164,39 @@
 
     .canvas-wrap {
       position: relative;
-      border-radius: var(--radius-sm);
-      overflow: hidden;
+      width: 100%;
+      max-width: min(100vw - 2rem, 460px);
       margin: 0 auto;
-      max-width: min(440px, 100%);
-      border: 1px solid rgba(255, 255, 255, 0.06);
-      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+      aspect-ratio: 1 / 1;
+      border-radius: calc(var(--radius-sm) + 6px);
+      overflow: hidden;
+      border: 1px solid rgba(167, 139, 250, 0.22);
+      box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.08),
+        0 0 0 1px rgba(0, 0, 0, 0.35),
+        0 20px 50px rgba(0, 0, 0, 0.45),
+        0 0 60px rgba(167, 139, 250, 0.12);
       touch-action: none;
       user-select: none;
       -webkit-user-select: none;
     }
+    .canvas-wrap.boost-hold::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      box-shadow: inset 0 0 40px rgba(52, 211, 153, 0.25);
+      border-radius: inherit;
+      animation: boostPulse 0.9s ease-in-out infinite;
+    }
+    @keyframes boostPulse {
+      0%, 100% { opacity: 0.35; }
+      50% { opacity: 0.85; }
+    }
     canvas {
       display: block;
       width: 100%;
-      height: auto;
-      vertical-align: middle;
+      height: 100%;
       background: var(--canvas-bg);
     }
 
@@ -406,6 +424,7 @@
     @media (pointer: coarse), (max-width: 720px) {
       .touch-pad { display: grid; }
     }
+    .touch-pad.show-always { display: grid; }
     .pill .diff-label { color: var(--accent2); }
   </style>
 </head>
@@ -414,7 +433,7 @@
     <header>
       <div class="brand">
         <h1>贪吃蛇</h1>
-        <p>极简节奏 · 本地排行 · 即时音效</p>
+        <p>霓虹画布 · 三控操作 · 粒子爆发 · 本地纪录</p>
       </div>
       <div class="toolbar">
         <div class="pill"><span class="dot" aria-hidden="true"></span>得分 <strong id="score">0</strong></div>
@@ -427,8 +446,8 @@
     </header>
 
     <div class="game-card">
-      <div class="canvas-wrap">
-        <canvas id="game" width="400" height="400" aria-label="贪吃蛇游戏画布"></canvas>
+      <div class="canvas-wrap" id="canvasWrap">
+        <canvas id="game" width="360" height="360" aria-label="贪吃蛇游戏画布"></canvas>
         <div class="overlay visible" id="overlay" role="dialog" aria-modal="true" aria-labelledby="diffTitle">
           <div class="overlay-page" id="pageDifficulty">
             <h2 id="diffTitle">选择难度</h2>
@@ -441,7 +460,7 @@
           </div>
           <div class="overlay-page" id="pageStandard" hidden>
             <h2 id="overlayTitle">暂停</h2>
-            <p class="sub" id="overlayMsg">按空格继续</p>
+            <p class="sub" id="overlayMsg">点击继续或按 P</p>
             <div class="overlay-actions" id="overlayDefaultActions">
               <button type="button" class="btn-primary" id="btnOverlay">继续</button>
             </div>
@@ -468,10 +487,11 @@
         <button type="button" class="touch-btn touch-down" id="touchDown" aria-label="向下">↓</button>
       </div>
       <p class="controls-hint" id="controlsHint">
-        <span class="kbd">↑</span><span class="kbd">↓</span><span class="kbd">←</span><span class="kbd">→</span> 或
-        <span class="kbd">W</span><span class="kbd">A</span><span class="kbd">S</span><span class="kbd">D</span>
-        · <span class="kbd">Space</span> 暂停 · <span class="kbd">R</span> 重开
-        <span id="controlsHintTouch" hidden><br />手机上可用下方方向键与暂停键</span>
+        键盘 <span class="kbd">↑↓←→</span> / <span class="kbd">WASD</span>
+        · 画布上滑动转向
+        · <span class="kbd">Space</span> 按住加速
+        · <span class="kbd">P</span> 暂停 · <span class="kbd">Esc</span> 暂停 · <span class="kbd">R</span> 重开
+        <span id="controlsHintTouch" hidden><br />触控：虚拟方向键 + 在画面上滑动；按住画面加速</span>
       </p>
     </div>
 
@@ -496,6 +516,51 @@
 (function () {
   const canvas = document.getElementById("game");
   const ctx = canvas.getContext("2d");
+  const canvasWrap = document.getElementById("canvasWrap");
+
+  /** 逻辑坐标边长（正方形），随容器宽度自适应 */
+  const COLS = 20;
+  const ROWS = 20;
+  let LOGICAL = 360;
+  let CELL = LOGICAL / COLS;
+
+  /** 按住加速时 tick 乘数（越小越快） */
+  const BOOST_TICK_MUL = 0.52;
+  /** 滑动最小像素位移（逻辑坐标近似：用 CSS 像素 / dpr 折算到逻辑边） */
+  const SWIPE_MIN_PX = 28;
+
+  let boostKey = false;
+  let boostPointer = false;
+  /** @type {number | null} */
+  let swipePointerId = null;
+  let swipeStartX = 0;
+  let swipeStartY = 0;
+
+  function isBoosting() {
+    return (boostKey || boostPointer) && running && !paused && !gameOver && difficultyChosen;
+  }
+
+  function syncBoostUi() {
+    canvasWrap.classList.toggle("boost-hold", isBoosting());
+  }
+
+  /** @type {{ x: number, y: number, vx: number, vy: number, life: number, rgb: string }[]} */
+  let particles = [];
+
+  function applyCanvasResolution() {
+    const rect = canvasWrap.getBoundingClientRect();
+    let w = Math.floor(rect.width);
+    if (!w || w < 200) w = 280;
+    w = Math.min(w, 560);
+    LOGICAL = w;
+    CELL = LOGICAL / COLS;
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    canvas.width = Math.round(LOGICAL * dpr);
+    canvas.height = Math.round(LOGICAL * dpr);
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.scale(dpr, dpr);
+  }
+  applyCanvasResolution();
   const scoreEl = document.getElementById("score");
   const bestEl = document.getElementById("best");
   const overlay = document.getElementById("overlay");
@@ -525,9 +590,20 @@
   const btnSaveLb = document.getElementById("btnSaveLb");
   const btnSkipLb = document.getElementById("btnSkipLb");
 
-  const COLS = 20;
-  const ROWS = 20;
-  const CELL = canvas.width / COLS;
+  /** 固定障碍（避开初始蛇身 6–8,10） */
+  const FIXED_OBSTACLES = [
+    { x: 5, y: 5 },
+    { x: 5, y: 6 },
+    { x: 6, y: 5 },
+    { x: 14, y: 14 },
+    { x: 14, y: 15 },
+    { x: 15, y: 14 },
+    { x: 10, y: 3 },
+    { x: 10, y: 4 },
+    { x: 9, y: 16 },
+    { x: 10, y: 16 },
+  ];
+  const fixedObstacleSet = new Set(FIXED_OBSTACLES.map((o) => o.x + "," + o.y));
 
   const BEST_KEY = "snake-best-score";
   const LB_KEY = "snake-leaderboard-v2";
@@ -548,6 +624,67 @@
   let soundMuted = localStorage.getItem(MUTE_KEY) === "1";
   let audioCtx = null;
   let pendingLbScore = null;
+
+  let obstacleIntervalId = null;
+  /** @type {{ x: number, y: number, until: number } | null} */
+  let tempObstacle = null;
+  let pauseObstacleAnchor = null;
+
+  function stopObstacleSpawner() {
+    if (obstacleIntervalId != null) {
+      clearInterval(obstacleIntervalId);
+      obstacleIntervalId = null;
+    }
+    tempObstacle = null;
+    pauseObstacleAnchor = null;
+  }
+
+  function startObstacleSpawner() {
+    stopObstacleSpawner();
+    obstacleIntervalId = setInterval(spawnTempObstacle, 5000);
+  }
+
+  function notePauseForObstacles() {
+    pauseObstacleAnchor = performance.now();
+  }
+
+  function resumeObstacleAfterPause() {
+    if (pauseObstacleAnchor == null) return;
+    const dt = performance.now() - pauseObstacleAnchor;
+    if (tempObstacle) tempObstacle.until += dt;
+    pauseObstacleAnchor = null;
+  }
+
+  function spawnTempObstacle() {
+    if (!running || paused || gameOver || !difficultyChosen) return;
+    const occ = new Set();
+    for (const s of snake) occ.add(s.x + "," + s.y);
+    occ.add(food.x + "," + food.y);
+    for (const k of fixedObstacleSet) occ.add(k);
+    if (tempObstacle) occ.add(tempObstacle.x + "," + tempObstacle.y);
+    const free = [];
+    for (let x = 0; x < COLS; x++) {
+      for (let y = 0; y < ROWS; y++) {
+        const key = x + "," + y;
+        if (!occ.has(key)) free.push({ x, y });
+      }
+    }
+    if (!free.length) return;
+    const pick = free[randInt(free.length)];
+    tempObstacle = { x: pick.x, y: pick.y, until: performance.now() + 3000 };
+  }
+
+  function tempObstacleActive() {
+    if (!tempObstacle) return false;
+    if (paused) return true;
+    return performance.now() < tempObstacle.until;
+  }
+
+  function blockedByObstacle(nh) {
+    if (fixedObstacleSet.has(nh.x + "," + nh.y)) return true;
+    if (tempObstacle && performance.now() < tempObstacle.until && nh.x === tempObstacle.x && nh.y === tempObstacle.y) return true;
+    return false;
+  }
 
   function syncSoundButton() {
     btnSound.textContent = soundMuted ? "音效：关" : "音效：开";
@@ -670,14 +807,65 @@
     return Math.floor(Math.random() * n);
   }
 
+  function spawnEatParticles(cx, cy) {
+    const n = 22 + randInt(14);
+    for (let i = 0; i < n; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const sp = LOGICAL * 0.0055 * (1.1 + Math.random() * 2.4);
+      const roll = Math.random();
+      const rgb = roll < 0.38 ? "167,139,250" : roll < 0.72 ? "52,211,153" : "251,113,133";
+      particles.push({
+        x: cx,
+        y: cy,
+        vx: Math.cos(a) * sp,
+        vy: Math.sin(a) * sp,
+        life: 1,
+        rgb,
+      });
+    }
+  }
+
+  function stepParticles(dt) {
+    if (!particles.length) return;
+    const decay = dt * 0.0011;
+    for (const p of particles) {
+      p.x += p.vx;
+      p.y += p.vy;
+      p.vx *= 0.965;
+      p.vy *= 0.965;
+      p.life -= decay;
+    }
+    particles = particles.filter((p) => p.life > 0.03);
+  }
+
+  function drawParticles() {
+    if (!particles.length) return;
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    for (const p of particles) {
+      const rad = CELL * 0.14 * Math.sqrt(p.life);
+      const g = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, rad * 4);
+      g.addColorStop(0, `rgba(${p.rgb},${0.7 * p.life})`);
+      g.addColorStop(0.35, `rgba(${p.rgb},${0.35 * p.life})`);
+      g.addColorStop(1, "rgba(0,0,0,0)");
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, rad * 4, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
   function emptyCell() {
     const occupied = new Set(snake.map((s) => s.x + "," + s.y));
+    for (const k of fixedObstacleSet) occupied.add(k);
+    if (tempObstacleActive()) occupied.add(tempObstacle.x + "," + tempObstacle.y);
     let x, y, guard = 0;
     do {
       x = randInt(COLS);
       y = randInt(ROWS);
       guard++;
-    } while (occupied.has(x + "," + y) && guard < COLS * ROWS * 2);
+    } while (occupied.has(x + "," + y) && guard < COLS * ROWS * 3);
     return { x, y };
   }
 
@@ -732,6 +920,16 @@
   }
 
   function openGameOver(reason) {
+    stopObstacleSpawner();
+    boostKey = false;
+    boostPointer = false;
+    if (swipePointerId != null) {
+      try {
+        canvasWrap.releasePointerCapture(swipePointerId);
+      } catch (_) {}
+      swipePointerId = null;
+    }
+    syncBoostUi();
     saveBest();
     sfxDie();
     pendingLbScore = score;
@@ -775,6 +973,12 @@
   }
 
   function resetGame() {
+    stopObstacleSpawner();
+    particles = [];
+    boostKey = false;
+    boostPointer = false;
+    swipePointerId = null;
+    syncBoostUi();
     snake = [
       { x: 8, y: 10 },
       { x: 7, y: 10 },
@@ -802,9 +1006,11 @@
     running = true;
     hideOverlay();
     lastTick = performance.now();
+    lastRafTime = performance.now();
     loadBest();
     sfxStart();
     syncPauseLabels();
+    startObstacleSpawner();
   }
 
   function opposite(a, b) {
@@ -824,6 +1030,12 @@
       return;
     }
 
+    if (blockedByObstacle(nh)) {
+      gameOver = true;
+      openGameOver("撞到障碍");
+      return;
+    }
+
     const eating = nh.x === food.x && nh.y === food.y;
     const bodyCheck = eating ? snake : snake.slice(0, -1);
     for (let i = 0; i < bodyCheck.length; i++) {
@@ -837,6 +1049,9 @@
     snake.unshift(nh);
 
     if (eating) {
+      const fcx = food.x * CELL + CELL * 0.5;
+      const fcy = food.y * CELL + CELL * 0.5;
+      spawnEatParticles(fcx, fcy);
       score += 10;
       scoreEl.textContent = String(score);
       food = emptyCell();
@@ -848,48 +1063,216 @@
     }
   }
 
-  function drawGrid() {
-    ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue("--canvas-bg").trim() || "#0c0e14";
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-    ctx.strokeStyle = "rgba(255,255,255,0.035)";
+  function drawBoard() {
+    const bg = getComputedStyle(document.documentElement).getPropertyValue("--canvas-bg").trim() || "#0c0e14";
+    const g = ctx.createRadialGradient(
+      LOGICAL * 0.35,
+      LOGICAL * 0.25,
+      0,
+      LOGICAL * 0.5,
+      LOGICAL * 0.5,
+      LOGICAL * 0.85
+    );
+    g.addColorStop(0, "rgba(167, 139, 250, 0.09)");
+    g.addColorStop(0.45, bg);
+    g.addColorStop(1, "#05060a");
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, LOGICAL, LOGICAL);
+
+    const t0 = (x, y) => ((x + y) & 1) === 0;
+    for (let x = 0; x < COLS; x++) {
+      for (let y = 0; y < ROWS; y++) {
+        if (t0(x, y)) {
+          ctx.fillStyle = "rgba(255,255,255,0.018)";
+          ctx.fillRect(x * CELL, y * CELL, CELL, CELL);
+        }
+      }
+    }
+
+    ctx.strokeStyle = "rgba(255,255,255,0.04)";
     ctx.lineWidth = 1;
     for (let x = 0; x <= COLS; x++) {
       ctx.beginPath();
       ctx.moveTo(x * CELL + 0.5, 0);
-      ctx.lineTo(x * CELL + 0.5, canvas.height);
+      ctx.lineTo(x * CELL + 0.5, LOGICAL);
       ctx.stroke();
     }
     for (let y = 0; y <= ROWS; y++) {
       ctx.beginPath();
       ctx.moveTo(0, y * CELL + 0.5);
-      ctx.lineTo(canvas.width, y * CELL + 0.5);
+      ctx.lineTo(LOGICAL, y * CELL + 0.5);
+      ctx.stroke();
+    }
+
+    ctx.strokeStyle = "rgba(255,255,255,0.14)";
+    ctx.strokeRect(0.5, 0.5, LOGICAL - 1, LOGICAL - 1);
+  }
+
+  function roundCellRect(x, y, pad, rMul) {
+    const px = x * CELL + pad;
+    const py = y * CELL + pad;
+    const s = CELL - pad * 2;
+    const r = Math.min(CELL * 0.32, s * (rMul || 0.28));
+    return { px, py, s, r };
+  }
+
+  function drawFixedObstacles() {
+    for (const o of FIXED_OBSTACLES) {
+      const { px, py, s, r } = roundCellRect(o.x, o.y, CELL * 0.12, 0.22);
+      const grd = ctx.createLinearGradient(px, py, px + s, py + s);
+      grd.addColorStop(0, "#4b5563");
+      grd.addColorStop(1, "#1f2937");
+      ctx.fillStyle = grd;
+      ctx.beginPath();
+      ctx.roundRect(px, py, s, s, r);
+      ctx.fill();
+      ctx.strokeStyle = "rgba(255,255,255,0.12)";
+      ctx.lineWidth = 1;
       ctx.stroke();
     }
   }
 
-  function drawCell(x, y, color, pad) {
-    ctx.fillStyle = color;
-    const px = x * CELL + pad;
-    const py = y * CELL + pad;
-    const s = CELL - pad * 2;
-    const r = Math.min(7, s * 0.28);
+  function drawTempObstacle() {
+    if (!tempObstacleActive()) return;
+    const o = tempObstacle;
+    const pulse = 0.85 + 0.15 * Math.sin(performance.now() / 220);
+    const { px, py, s, r } = roundCellRect(o.x, o.y, CELL * 0.1, 0.26);
+    const grd = ctx.createRadialGradient(px + s * 0.35, py + s * 0.35, 0, px + s * 0.5, py + s * 0.5, s * 0.75);
+    grd.addColorStop(0, `rgba(251, 191, 36, ${0.55 * pulse})`);
+    grd.addColorStop(0.6, `rgba(249, 115, 22, ${0.85 * pulse})`);
+    grd.addColorStop(1, "rgba(185, 28, 28, 0.95)");
+    ctx.fillStyle = grd;
     ctx.beginPath();
     ctx.roundRect(px, py, s, s, r);
     ctx.fill();
+    ctx.strokeStyle = "rgba(255,255,255,0.35)";
+    ctx.lineWidth = 1.25;
+    ctx.stroke();
+  }
+
+  function drawFood() {
+    const { px, py, s, r } = roundCellRect(food.x, food.y, CELL * 0.14, 0.3);
+    const breathe = 1 + 0.04 * Math.sin(performance.now() / 350);
+    const cx = px + s / 2;
+    const cy = py + s / 2;
+    const rs = (s / 2) * breathe;
+    ctx.save();
+    ctx.shadowBlur = CELL * 0.55;
+    ctx.shadowColor = "rgba(251, 113, 133, 0.75)";
+    const rg = ctx.createRadialGradient(cx - rs * 0.25, cy - rs * 0.25, 0, cx, cy, rs * 1.2);
+    rg.addColorStop(0, "#ffe4e6");
+    rg.addColorStop(0.4, "#fb7185");
+    rg.addColorStop(1, "#9f1239");
+    ctx.fillStyle = rg;
+    ctx.beginPath();
+    ctx.roundRect(px, py, s, s, r);
+    ctx.fill();
+    ctx.shadowBlur = 0;
+    ctx.strokeStyle = "rgba(255,255,255,0.35)";
+    ctx.lineWidth = 1.15;
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  function drawSnakeEyes(px, py, s, face) {
+    const ex = s * 0.22;
+    const ey = s * 0.28;
+    const er = Math.max(1.8, s * 0.11);
+    let ox = 0;
+    let oy = 0;
+    if (face.x === 1) ox = s * 0.12;
+    if (face.x === -1) ox = -s * 0.12;
+    if (face.y === 1) oy = s * 0.12;
+    if (face.y === -1) oy = -s * 0.12;
+    const bx = px + s * 0.5 + ox;
+    const by = py + s * 0.42 + oy;
+    ctx.fillStyle = "#f8fafc";
+    ctx.beginPath();
+    ctx.arc(bx - ex, by, er, 0, Math.PI * 2);
+    ctx.arc(bx + ex, by, er, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "#0f172a";
+    const pup = s * 0.045;
+    ctx.beginPath();
+    ctx.arc(bx - ex + face.x * pup * 0.5, by + face.y * pup * 0.5, er * 0.45, 0, Math.PI * 2);
+    ctx.arc(bx + ex + face.x * pup * 0.5, by + face.y * pup * 0.5, er * 0.45, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  function drawSnake() {
+    const face = nextDir.x || nextDir.y ? nextDir : dir;
+    const n = snake.length;
+    ctx.save();
+    const glowLayers = [
+      { blur: CELL * 0.95, col: "rgba(167, 139, 250, 0.28)" },
+      { blur: CELL * 0.42, col: "rgba(52, 211, 153, 0.42)" },
+    ];
+    for (const gl of glowLayers) {
+      ctx.shadowBlur = gl.blur;
+      ctx.shadowColor = gl.col;
+      for (let i = n - 1; i >= 0; i--) {
+        const seg = snake[i];
+        const isHead = i === 0;
+        const pad = isHead ? CELL * 0.11 : CELL * 0.13;
+        const { px, py, s, r } = roundCellRect(seg.x, seg.y, pad, isHead ? 0.3 : 0.26);
+        const t = n <= 1 ? 0 : i / (n - 1);
+        const lg = ctx.createLinearGradient(px - s * 0.15, py, px + s * 1.1, py + s * 1.05);
+        lg.addColorStop(0, `rgba(196, 181, 253, ${0.45 + t * 0.35})`);
+        lg.addColorStop(0.5, `rgba(45, 212, 191, ${0.4 + t * 0.38})`);
+        lg.addColorStop(1, `rgba(244, 114, 182, ${0.35 + t * 0.4})`);
+        ctx.fillStyle = lg;
+        ctx.beginPath();
+        ctx.roundRect(px, py, s, s, r);
+        ctx.fill();
+      }
+    }
+    ctx.shadowBlur = 0;
+    for (let i = n - 1; i >= 0; i--) {
+      const seg = snake[i];
+      const isHead = i === 0;
+      const pad = isHead ? CELL * 0.11 : CELL * 0.13;
+      const { px, py, s, r } = roundCellRect(seg.x, seg.y, pad, isHead ? 0.3 : 0.26);
+      const t = n <= 1 ? 0 : i / (n - 1);
+      const lg = ctx.createLinearGradient(px - s * 0.25, py - s * 0.2, px + s * 1.05, py + s * 1.15);
+      if (isHead) {
+        lg.addColorStop(0, "#f5d0fe");
+        lg.addColorStop(0.42, "#34d399");
+        lg.addColorStop(1, "#059669");
+      } else {
+        lg.addColorStop(0, `rgba(167, 139, 250, ${0.82 - t * 0.28})`);
+        lg.addColorStop(0.48, `rgba(52, 211, 153, ${0.55 + t * 0.32})`);
+        lg.addColorStop(1, `rgba(244, 114, 182, ${0.62 - t * 0.18})`);
+      }
+      ctx.fillStyle = lg;
+      ctx.beginPath();
+      ctx.roundRect(px, py, s, s, r);
+      ctx.fill();
+      ctx.strokeStyle = isHead ? "rgba(255,255,255,0.5)" : "rgba(255,255,255,0.16)";
+      ctx.lineWidth = isHead ? 1.65 : 1.05;
+      ctx.stroke();
+      if (isHead) drawSnakeEyes(px, py, s, face);
+    }
+    ctx.restore();
   }
 
   function draw() {
-    drawGrid();
-    drawCell(food.x, food.y, "#fb7185", 3);
-    for (let i = snake.length - 1; i >= 0; i--) {
-      const seg = snake[i];
-      const isHead = i === 0;
-      drawCell(seg.x, seg.y, isHead ? "#6ee7b7" : "#34d399", isHead ? 2 : 3);
-    }
+    drawBoard();
+    drawFixedObstacles();
+    drawTempObstacle();
+    drawFood();
+    drawSnake();
+    drawParticles();
   }
+
+  let lastRafTime = performance.now();
 
   function loop(now) {
     requestAnimationFrame(loop);
+    const dt = Math.min(40, now - lastRafTime);
+    lastRafTime = now;
+    stepParticles(dt);
+    syncBoostUi();
+
     if (!running) {
       draw();
       return;
@@ -902,8 +1285,12 @@
       draw();
       return;
     }
-    while (now - lastTick >= tickMs) {
-      lastTick += tickMs;
+    if (tempObstacle && performance.now() >= tempObstacle.until) tempObstacle = null;
+    let guard = 0;
+    while (guard++ < 16) {
+      const stepInt = tickMs * (isBoosting() ? BOOST_TICK_MUL : 1);
+      if (now - lastTick < stepInt) break;
+      lastTick += stepInt;
       step();
       if (gameOver) break;
     }
@@ -920,12 +1307,31 @@
     if (!difficultyChosen || gameOver || !running) return;
     paused = !paused;
     if (paused) {
+      notePauseForObstacles();
+      boostKey = false;
+      boostPointer = false;
+      if (swipePointerId != null) {
+        try {
+          canvasWrap.releasePointerCapture(swipePointerId);
+        } catch (_) {}
+        swipePointerId = null;
+      }
+      syncBoostUi();
       sfxPause();
-      showOverlay("已暂停", "按空格、工具栏或下方按钮继续");
+      showOverlay("已暂停", "点击继续、按 P / Esc，或使用工具栏与下方按钮");
     } else {
+      resumeObstacleAfterPause();
       hideOverlay();
     }
     syncPauseLabels();
+  }
+
+  function onKeyUp(e) {
+    const lk = e.key.toLowerCase();
+    if (lk === " " || lk === "spacebar") {
+      boostKey = false;
+      syncBoostUi();
+    }
   }
 
   function onKey(e) {
@@ -942,9 +1348,19 @@
     };
     if (lk === " " || lk === "spacebar") {
       if (gameOver && document.activeElement === playerName) return;
+      if (!difficultyChosen || gameOver || !running) return;
+      if (e.repeat) return;
+      e.preventDefault();
+      boostKey = true;
+      syncBoostUi();
+      resumeAudio();
+      return;
+    }
+    if (lk === "p" || e.key === "Escape") {
+      if (gameOver && document.activeElement === playerName) return;
       e.preventDefault();
       if (gameOver) return;
-      if (!difficultyChosen) return;
+      if (!difficultyChosen || !running) return;
       togglePause();
       return;
     }
@@ -979,6 +1395,7 @@
   });
   btnOverlay.addEventListener("click", () => {
     paused = false;
+    resumeObstacleAfterPause();
     hideOverlay();
     syncPauseLabels();
   });
@@ -1020,8 +1437,68 @@
     { passive: false }
   );
 
+  function onWrapPointerDown(ev) {
+    if (ev.pointerType === "mouse" && ev.button !== 0) return;
+    if (!difficultyChosen || gameOver || !running) return;
+    resumeAudio();
+    boostPointer = true;
+    syncBoostUi();
+    swipePointerId = ev.pointerId;
+    swipeStartX = ev.clientX;
+    swipeStartY = ev.clientY;
+    try {
+      canvasWrap.setPointerCapture(ev.pointerId);
+    } catch (_) {}
+  }
+
+  function onWrapPointerMove(ev) {
+    if (swipePointerId !== ev.pointerId) return;
+    if (!running || paused || gameOver || !difficultyChosen) return;
+    const dx = ev.clientX - swipeStartX;
+    const dy = ev.clientY - swipeStartY;
+    const dist = Math.hypot(dx, dy);
+    if (dist < SWIPE_MIN_PX) return;
+    if (Math.abs(dx) >= Math.abs(dy)) {
+      trySetDirection({ x: dx > 0 ? 1 : -1, y: 0 });
+    } else {
+      trySetDirection({ x: 0, y: dy > 0 ? 1 : -1 });
+    }
+    swipeStartX = ev.clientX;
+    swipeStartY = ev.clientY;
+  }
+
+  function onWrapPointerUp(ev) {
+    if (swipePointerId != null && ev.pointerId !== swipePointerId) return;
+    boostPointer = false;
+    swipePointerId = null;
+    syncBoostUi();
+    try {
+      canvasWrap.releasePointerCapture(ev.pointerId);
+    } catch (_) {}
+  }
+
+  canvasWrap.addEventListener("pointerdown", onWrapPointerDown, { passive: false });
+  canvasWrap.addEventListener("pointermove", onWrapPointerMove);
+  canvasWrap.addEventListener("pointerup", onWrapPointerUp);
+  canvasWrap.addEventListener("pointercancel", onWrapPointerUp);
+  canvasWrap.addEventListener("lostpointercapture", onWrapPointerUp);
+
+  window.addEventListener("blur", () => {
+    boostKey = false;
+    syncBoostUi();
+  });
   window.addEventListener("keydown", onKey);
-  window.addEventListener("resize", syncTouchHint);
+  window.addEventListener("keyup", onKeyUp);
+  window.addEventListener("resize", () => {
+    applyCanvasResolution();
+    syncTouchHint();
+  });
+  if (typeof ResizeObserver !== "undefined") {
+    const ro = new ResizeObserver(() => {
+      applyCanvasResolution();
+    });
+    ro.observe(canvasWrap);
+  }
   ["click", "touchstart"].forEach((ev) => {
     document.body.addEventListener(ev, () => resumeAudio(), { passive: true });
   });
