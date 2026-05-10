@@ -5,9 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta name="mobile-web-app-capable" content="yes" />
   <title>Snake · 贪吃蛇</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="preconnect" href="https://fonts.googleapis.com " />
+  <link rel="preconnect" href="https://fonts.gstatic.com " crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300 ;400;500;600;700&display=swap" rel="stylesheet" />
   <style>
     :root {
       --bg0: #07080c;
@@ -421,8 +421,38 @@
     .touch-right { grid-column: 3; grid-row: 2; }
     .touch-down { grid-column: 2; grid-row: 3; }
 
+    .boost-bar {
+      display: none;
+      margin: 0.65rem auto 0;
+      max-width: min(100%, 460px);
+      min-height: 46px;
+      align-items: center;
+      justify-content: center;
+      border-radius: var(--radius-sm);
+      touch-action: none;
+      user-select: none;
+      -webkit-user-select: none;
+      cursor: pointer;
+      background: rgba(52, 211, 153, 0.14);
+      border: 1px solid rgba(52, 211, 153, 0.28);
+      color: rgba(244, 246, 250, 0.88);
+      font-size: 0.82rem;
+      font-weight: 600;
+      letter-spacing: 0.06em;
+      transition: background 0.12s ease, border-color 0.12s ease, transform 0.1s ease;
+    }
+    .boost-bar:active,
+    .boost-bar.is-pressing {
+      background: rgba(52, 211, 153, 0.28);
+      border-color: rgba(52, 211, 153, 0.45);
+      transform: scale(0.99);
+    }
+    .boost-bar .boost-bar-inner {
+      pointer-events: none;
+    }
     @media (pointer: coarse), (max-width: 720px) {
       .touch-pad { display: grid; }
+      .boost-bar { display: flex; }
     }
     .touch-pad.show-always { display: grid; }
     .pill .diff-label { color: var(--accent2); }
@@ -479,6 +509,15 @@
           </div>
         </div>
       </div>
+      <div
+        class="boost-bar"
+        id="boostBar"
+        role="button"
+        tabindex="0"
+        aria-label="按住此处加速"
+      >
+        <span class="boost-bar-inner">按住加速</span>
+      </div>
       <div class="touch-pad" id="touchPad" aria-label="方向与暂停">
         <button type="button" class="touch-btn touch-up" id="touchUp" aria-label="向上">↑</button>
         <button type="button" class="touch-btn touch-left" id="touchLeft" aria-label="向左">←</button>
@@ -491,7 +530,7 @@
         · 画布上滑动转向
         · <span class="kbd">Space</span> 按住加速
         · <span class="kbd">P</span> 暂停 · <span class="kbd">Esc</span> 暂停 · <span class="kbd">R</span> 重开
-        <span id="controlsHintTouch" hidden><br />触控：虚拟方向键 + 在画面上滑动；按住画面加速</span>
+        <span id="controlsHintTouch" hidden><br />触控：虚拟方向键 + 在画面上滑动转向；按住下方半透明条加速</span>
       </p>
     </div>
 
@@ -513,201 +552,184 @@
   </div>
 
   <script>
-(function () {
-  const canvas = document.getElementById("game");
-  const ctx = canvas.getContext("2d");
-  const canvasWrap = document.getElementById("canvasWrap");
+// ========== MODEL ==========
+class SnakeModel {
+  constructor() {
+    this.COLS = 20;
+    this.ROWS = 20;
+    this.SNAKE_CAP = this.COLS * this.ROWS;
+    this.snakeX = new Int16Array(this.SNAKE_CAP);
+    this.snakeY = new Int16Array(this.SNAKE_CAP);
+    this.snakeHead = 0;
+    this.snakeTail = 0;
+    this.snakeLen = 0;
 
-  /** 逻辑坐标边长（正方形），随容器宽度自适应 */
-  const COLS = 20;
-  const ROWS = 20;
-  let LOGICAL = 360;
-  let CELL = LOGICAL / COLS;
+    this.LOGICAL = 360;
+    this.CELL = this.LOGICAL / this.COLS;
 
-  /** 按住加速时 tick 乘数（越小越快） */
-  const BOOST_TICK_MUL = 0.52;
-  /** 滑动最小像素位移（逻辑坐标近似：用 CSS 像素 / dpr 折算到逻辑边） */
-  const SWIPE_MIN_PX = 28;
+    this.BOOST_TICK_MUL = 0.52;
+    this.SWIPE_MIN_PX = 28;
 
-  let boostKey = false;
-  let boostPointer = false;
-  /** @type {number | null} */
-  let swipePointerId = null;
-  let swipeStartX = 0;
-  let swipeStartY = 0;
+    this.boostKey = false;
+    this.boostPointer = false;
+    this.boostBarHeld = false;
 
-  function isBoosting() {
-    return (boostKey || boostPointer) && running && !paused && !gameOver && difficultyChosen;
+    this.particles = [];
+
+    this.FIXED_OBSTACLES = [
+      { x: 5, y: 5 },
+      { x: 5, y: 6 },
+      { x: 6, y: 5 },
+      { x: 14, y: 14 },
+      { x: 14, y: 15 },
+      { x: 15, y: 14 },
+      { x: 10, y: 3 },
+      { x: 10, y: 4 },
+      { x: 9, y: 16 },
+      { x: 10, y: 16 },
+    ];
+    this.fixedObstacleSet = new Set(this.FIXED_OBSTACLES.map((o) => o.x + "," + o.y));
+
+    this.BEST_KEY = "snake-best-score";
+    this.LB_KEY = "snake-leaderboard-v2";
+    this.MUTE_KEY = "snake-sound-muted";
+
+    this.DIFF = {
+      easy: { start: 200, min: 105, step: 1 },
+      normal: { start: 130, min: 72, step: 2 },
+      hard: { start: 82, min: 42, step: 3 },
+    };
+    this.DIFF_NAMES = { easy: "简单", normal: "普通", hard: "困难" };
+
+    this.dir = { x: 1, y: 0 };
+    this.nextDir = { x: 1, y: 0 };
+    this.food = { x: 0, y: 0 };
+    this.score = 0;
+    this.tickMs = 130;
+
+    this.running = false;
+    this.paused = false;
+    this.gameOver = false;
+    this.difficultyChosen = false;
+    this.currentDifficulty = "normal";
+    this.soundMuted = localStorage.getItem(this.MUTE_KEY) === "1";
+    this.audioCtx = null;
+    this.pendingLbScore = null;
+
+    this.obstacleIntervalId = null;
+    this.tempObstacle = null;
+    this.pauseObstacleAnchor = null;
   }
 
-  function syncBoostUi() {
-    canvasWrap.classList.toggle("boost-hold", isBoosting());
+  setWorldSize(logical, cell) {
+    this.LOGICAL = logical;
+    this.CELL = cell;
   }
 
-  /** @type {{ x: number, y: number, vx: number, vy: number, life: number, rgb: string }[]} */
-  let particles = [];
-
-  function applyCanvasResolution() {
-    const rect = canvasWrap.getBoundingClientRect();
-    let w = Math.floor(rect.width);
-    if (!w || w < 200) w = 280;
-    w = Math.min(w, 560);
-    LOGICAL = w;
-    CELL = LOGICAL / COLS;
-    const dpr = Math.min(2, window.devicePixelRatio || 1);
-    canvas.width = Math.round(LOGICAL * dpr);
-    canvas.height = Math.round(LOGICAL * dpr);
-    ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.scale(dpr, dpr);
+  isBoosting() {
+    return (this.boostKey || this.boostPointer || this.boostBarHeld) && this.running && !this.paused && !this.gameOver && this.difficultyChosen;
   }
-  applyCanvasResolution();
-  const scoreEl = document.getElementById("score");
-  const bestEl = document.getElementById("best");
-  const overlay = document.getElementById("overlay");
-  const overlayTitle = document.getElementById("overlayTitle");
-  const overlayMsg = document.getElementById("overlayMsg");
-  const overlayDefaultActions = document.getElementById("overlayDefaultActions");
-  const btnOverlay = document.getElementById("btnOverlay");
-  const btnRestart = document.getElementById("btnRestart");
-  const btnPause = document.getElementById("btnPause");
-  const btnSound = document.getElementById("btnSound");
-  const pageDifficulty = document.getElementById("pageDifficulty");
-  const pageStandard = document.getElementById("pageStandard");
-  const pillDifficulty = document.getElementById("pillDifficulty");
-  const diffLabel = document.getElementById("diffLabel");
-  const controlsHintTouch = document.getElementById("controlsHintTouch");
-  const touchUp = document.getElementById("touchUp");
-  const touchDown = document.getElementById("touchDown");
-  const touchLeft = document.getElementById("touchLeft");
-  const touchRight = document.getElementById("touchRight");
-  const touchPause = document.getElementById("touchPause");
-  const lbBody = document.getElementById("lbBody");
-  const lbEmpty = document.getElementById("lbEmpty");
-  const lbTable = document.getElementById("lbTable");
-  const overlayGameOver = document.getElementById("overlayGameOver");
-  const goScoreLine = document.getElementById("goScoreLine");
-  const playerName = document.getElementById("playerName");
-  const btnSaveLb = document.getElementById("btnSaveLb");
-  const btnSkipLb = document.getElementById("btnSkipLb");
 
-  /** 固定障碍（避开初始蛇身 6–8,10） */
-  const FIXED_OBSTACLES = [
-    { x: 5, y: 5 },
-    { x: 5, y: 6 },
-    { x: 6, y: 5 },
-    { x: 14, y: 14 },
-    { x: 14, y: 15 },
-    { x: 15, y: 14 },
-    { x: 10, y: 3 },
-    { x: 10, y: 4 },
-    { x: 9, y: 16 },
-    { x: 10, y: 16 },
-  ];
-  const fixedObstacleSet = new Set(FIXED_OBSTACLES.map((o) => o.x + "," + o.y));
+  snakeHeadPos() {
+    return { x: this.snakeX[this.snakeHead], y: this.snakeY[this.snakeHead] };
+  }
 
-  const BEST_KEY = "snake-best-score";
-  const LB_KEY = "snake-leaderboard-v2";
-  const MUTE_KEY = "snake-sound-muted";
-
-  /** 初始间隔 ms（越小越快）、最快速度下限、每吃一个加快的步长 */
-  const DIFF = {
-    easy: { start: 200, min: 105, step: 1 },
-    normal: { start: 130, min: 72, step: 2 },
-    hard: { start: 82, min: 42, step: 3 },
-  };
-  const DIFF_NAMES = { easy: "简单", normal: "普通", hard: "困难" };
-
-  let snake, dir, nextDir, food, score, tickMs, lastTick;
-  let running, paused, gameOver;
-  let difficultyChosen = false;
-  let currentDifficulty = "normal";
-  let soundMuted = localStorage.getItem(MUTE_KEY) === "1";
-  let audioCtx = null;
-  let pendingLbScore = null;
-
-  let obstacleIntervalId = null;
-  /** @type {{ x: number, y: number, until: number } | null} */
-  let tempObstacle = null;
-  let pauseObstacleAnchor = null;
-
-  function stopObstacleSpawner() {
-    if (obstacleIntervalId != null) {
-      clearInterval(obstacleIntervalId);
-      obstacleIntervalId = null;
+  iterateSnakeSegments(cb) {
+    if (this.snakeLen <= 0) return;
+    let i = this.snakeTail;
+    for (let k = 0; k < this.snakeLen; k++) {
+      const isHead = k === this.snakeLen - 1;
+      cb(this.snakeX[i], this.snakeY[i], isHead);
+      if (i === this.snakeHead) break;
+      i = (i + 1) % this.SNAKE_CAP;
     }
-    tempObstacle = null;
-    pauseObstacleAnchor = null;
   }
 
-  function startObstacleSpawner() {
-    stopObstacleSpawner();
-    obstacleIntervalId = setInterval(spawnTempObstacle, 5000);
+  addSnakeCellsToOccSet(occ) {
+    this.iterateSnakeSegments((x, y) => {
+      occ.add(x + "," + y);
+    });
   }
 
-  function notePauseForObstacles() {
-    pauseObstacleAnchor = performance.now();
+  stopObstacleSpawner() {
+    if (this.obstacleIntervalId != null) {
+      clearInterval(this.obstacleIntervalId);
+      this.obstacleIntervalId = null;
+    }
+    this.tempObstacle = null;
+    this.pauseObstacleAnchor = null;
   }
 
-  function resumeObstacleAfterPause() {
-    if (pauseObstacleAnchor == null) return;
-    const dt = performance.now() - pauseObstacleAnchor;
-    if (tempObstacle) tempObstacle.until += dt;
-    pauseObstacleAnchor = null;
+  startObstacleSpawner() {
+    this.stopObstacleSpawner();
+    this.obstacleIntervalId = setInterval(() => this.spawnTempObstacle(), 5000);
   }
 
-  function spawnTempObstacle() {
-    if (!running || paused || gameOver || !difficultyChosen) return;
+  notePauseForObstacles() {
+    this.pauseObstacleAnchor = performance.now();
+  }
+
+  resumeObstacleAfterPause() {
+    if (this.pauseObstacleAnchor == null) return;
+    const dt = performance.now() - this.pauseObstacleAnchor;
+    if (this.tempObstacle) this.tempObstacle.until += dt;
+    this.pauseObstacleAnchor = null;
+  }
+
+  spawnTempObstacle() {
+    if (!this.running || this.paused || this.gameOver || !this.difficultyChosen) return;
     const occ = new Set();
-    for (const s of snake) occ.add(s.x + "," + s.y);
-    occ.add(food.x + "," + food.y);
-    for (const k of fixedObstacleSet) occ.add(k);
-    if (tempObstacle) occ.add(tempObstacle.x + "," + tempObstacle.y);
+    this.addSnakeCellsToOccSet(occ);
+    occ.add(this.food.x + "," + this.food.y);
+    for (const k of this.fixedObstacleSet) occ.add(k);
+    if (this.tempObstacle) occ.add(this.tempObstacle.x + "," + this.tempObstacle.y);
     const free = [];
-    for (let x = 0; x < COLS; x++) {
-      for (let y = 0; y < ROWS; y++) {
+    for (let x = 0; x < this.COLS; x++) {
+      for (let y = 0; y < this.ROWS; y++) {
         const key = x + "," + y;
         if (!occ.has(key)) free.push({ x, y });
       }
     }
     if (!free.length) return;
-    const pick = free[randInt(free.length)];
-    tempObstacle = { x: pick.x, y: pick.y, until: performance.now() + 3000 };
+    const pick = free[this.randInt(free.length)];
+    this.tempObstacle = { x: pick.x, y: pick.y, until: performance.now() + 3000 };
   }
 
-  function tempObstacleActive() {
-    if (!tempObstacle) return false;
-    if (paused) return true;
-    return performance.now() < tempObstacle.until;
+  tempObstacleActive() {
+    if (!this.tempObstacle) return false;
+    if (this.paused) return true;
+    return performance.now() < this.tempObstacle.until;
   }
 
-  function blockedByObstacle(nh) {
-    if (fixedObstacleSet.has(nh.x + "," + nh.y)) return true;
-    if (tempObstacle && performance.now() < tempObstacle.until && nh.x === tempObstacle.x && nh.y === tempObstacle.y) return true;
+  expireTempObstacle() {
+    if (this.tempObstacle && performance.now() >= this.tempObstacle.until) {
+      this.tempObstacle = null;
+    }
+  }
+
+  blockedByObstacle(nh) {
+    if (this.fixedObstacleSet.has(nh.x + "," + nh.y)) return true;
+    if (this.tempObstacle && performance.now() < this.tempObstacle.until && nh.x === this.tempObstacle.x && nh.y === this.tempObstacle.y) return true;
     return false;
   }
 
-  function syncSoundButton() {
-    btnSound.textContent = soundMuted ? "音效：关" : "音效：开";
-    btnSound.setAttribute("aria-pressed", soundMuted ? "true" : "false");
-  }
-
-  function getAudio() {
-    if (!audioCtx) {
+  getAudio() {
+    if (!this.audioCtx) {
       const AC = window.AudioContext || window.webkitAudioContext;
       if (!AC) return null;
-      audioCtx = new AC();
+      this.audioCtx = new AC();
     }
-    return audioCtx;
+    return this.audioCtx;
   }
 
-  function resumeAudio() {
-    const ctx = getAudio();
+  resumeAudio() {
+    const ctx = this.getAudio();
     if (ctx && ctx.state === "suspended") ctx.resume().catch(() => {});
   }
 
-  function playTone(freq, dur, vol, type) {
-    if (soundMuted) return;
-    const ctx = getAudio();
+  playTone(freq, dur, vol, type) {
+    if (this.soundMuted) return;
+    const ctx = this.getAudio();
     if (!ctx) return;
     const t0 = ctx.currentTime;
     const osc = ctx.createOscillator();
@@ -722,32 +744,32 @@
     osc.stop(t0 + dur + 0.02);
   }
 
-  function sfxEat() {
-    resumeAudio();
-    playTone(520, 0.05, 0.06, "triangle");
-    setTimeout(() => playTone(784, 0.07, 0.06, "triangle"), 45);
+  sfxEat() {
+    this.resumeAudio();
+    this.playTone(520, 0.05, 0.06, "triangle");
+    setTimeout(() => this.playTone(784, 0.07, 0.06, "triangle"), 45);
   }
 
-  function sfxDie() {
-    resumeAudio();
-    playTone(185, 0.12, 0.09, "sawtooth");
-    setTimeout(() => playTone(95, 0.22, 0.1, "sawtooth"), 90);
+  sfxDie() {
+    this.resumeAudio();
+    this.playTone(185, 0.12, 0.09, "sawtooth");
+    setTimeout(() => this.playTone(95, 0.22, 0.1, "sawtooth"), 90);
   }
 
-  function sfxPause() {
-    resumeAudio();
-    playTone(330, 0.06, 0.04, "sine");
+  sfxPause() {
+    this.resumeAudio();
+    this.playTone(330, 0.06, 0.04, "sine");
   }
 
-  function sfxStart() {
-    resumeAudio();
-    playTone(440, 0.06, 0.045, "sine");
-    setTimeout(() => playTone(554, 0.08, 0.045, "sine"), 70);
+  sfxStart() {
+    this.resumeAudio();
+    this.playTone(440, 0.06, 0.045, "sine");
+    setTimeout(() => this.playTone(554, 0.08, 0.045, "sine"), 70);
   }
 
-  function loadLeaderboard() {
+  loadLeaderboard() {
     try {
-      const raw = localStorage.getItem(LB_KEY);
+      const raw = localStorage.getItem(this.LB_KEY);
       const arr = raw ? JSON.parse(raw) : [];
       return Array.isArray(arr) ? arr : [];
     } catch {
@@ -755,24 +777,258 @@
     }
   }
 
-  function saveLeaderboard(rows) {
-    localStorage.setItem(LB_KEY, JSON.stringify(rows.slice(0, 10)));
+  saveLeaderboard(rows) {
+    localStorage.setItem(this.LB_KEY, JSON.stringify(rows.slice(0, 10)));
   }
 
-  function renderLeaderboard() {
-    const rows = loadLeaderboard()
+  loadBest() {
+    const v = parseInt(localStorage.getItem(this.BEST_KEY) || "0", 10);
+    return Number.isFinite(v) ? v : 0;
+  }
+
+  updateHighScore(currentScore) {
+    const best = this.loadBest();
+    if (currentScore > best) {
+      localStorage.setItem(this.BEST_KEY, String(currentScore));
+      return currentScore;
+    }
+    return best;
+  }
+
+  randInt(n) {
+    return Math.floor(Math.random() * n);
+  }
+
+  spawnEatParticles(cx, cy) {
+    const n = 22 + this.randInt(14);
+    for (let i = 0; i < n; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const sp = this.LOGICAL * 0.0055 * (1.1 + Math.random() * 2.4);
+      const roll = Math.random();
+      const rgb = roll < 0.38 ? "167,139,250" : roll < 0.72 ? "52,211,153" : "251,113,133";
+      this.particles.push({
+        x: cx,
+        y: cy,
+        vx: Math.cos(a) * sp,
+        vy: Math.sin(a) * sp,
+        life: 1,
+        rgb,
+      });
+    }
+  }
+
+  stepParticles(dt) {
+    if (!this.particles.length) return;
+    const decay = dt * 0.0011;
+    for (const p of this.particles) {
+      p.x += p.vx;
+      p.y += p.vy;
+      p.vx *= 0.965;
+      p.vy *= 0.965;
+      p.life -= decay;
+    }
+    this.particles = this.particles.filter((p) => p.life > 0.03);
+  }
+
+  emptyCell() {
+    const occupied = new Set();
+    this.addSnakeCellsToOccSet(occupied);
+    for (const k of this.fixedObstacleSet) occupied.add(k);
+    if (this.tempObstacleActive()) occupied.add(this.tempObstacle.x + "," + this.tempObstacle.y);
+    let x, y, guard = 0;
+    do {
+      x = this.randInt(this.COLS);
+      y = this.randInt(this.ROWS);
+      guard++;
+    } while (occupied.has(x + "," + y) && guard < this.COLS * this.ROWS * 3);
+    return { x, y };
+  }
+
+  tickCfg() {
+    return this.DIFF[this.currentDifficulty] || this.DIFF.normal;
+  }
+
+  opposite(a, b) {
+    return a.x === -b.x && a.y === -b.y;
+  }
+
+  moveSnake() {
+    if (!this.running || this.paused || this.gameOver) {
+      return { moved: false, ate: false };
+    }
+
+    this.dir = { ...this.nextDir };
+    const head = this.snakeHeadPos();
+    const nh = { x: head.x + this.dir.x, y: head.y + this.dir.y };
+
+    if (nh.x < 0 || nh.x >= this.COLS || nh.y < 0 || nh.y >= this.ROWS) {
+      this.gameOver = true;
+      return { moved: false, ate: false, gameOver: true, reason: "撞墙" };
+    }
+
+    if (this.blockedByObstacle(nh)) {
+      this.gameOver = true;
+      return { moved: false, ate: false, gameOver: true, reason: "撞到障碍" };
+    }
+
+    const eating = nh.x === this.food.x && nh.y === this.food.y;
+
+    let i = eating ? this.snakeTail : (this.snakeTail + 1) % this.SNAKE_CAP;
+    while (true) {
+      if (this.snakeX[i] === nh.x && this.snakeY[i] === nh.y) {
+        this.gameOver = true;
+        return { moved: false, ate: false, gameOver: true, reason: "咬到自己" };
+      }
+      if (i === this.snakeHead) break;
+      i = (i + 1) % this.SNAKE_CAP;
+    }
+
+    if (eating && this.snakeLen >= this.SNAKE_CAP) {
+      this.gameOver = true;
+      return { moved: false, ate: false, gameOver: true, reason: "蛇身占满棋盘" };
+    }
+
+    const newHeadIdx = (this.snakeHead + 1) % this.SNAKE_CAP;
+    this.snakeX[newHeadIdx] = nh.x;
+    this.snakeY[newHeadIdx] = nh.y;
+    this.snakeHead = newHeadIdx;
+
+    if (eating) {
+      this.score += 10;
+      this.snakeLen++;
+      this.food = this.emptyCell();
+      const cfg = this.tickCfg();
+      this.tickMs = Math.max(cfg.min, this.tickMs - cfg.step);
+      return { moved: true, ate: true, gameOver: false };
+    } else {
+      this.snakeTail = (this.snakeTail + 1) % this.SNAKE_CAP;
+      return { moved: true, ate: false, gameOver: false };
+    }
+  }
+
+  resetGameData() {
+    this.stopObstacleSpawner();
+    this.particles = [];
+    this.boostKey = false;
+    this.boostPointer = false;
+    this.boostBarHeld = false;
+
+    this.snakeLen = 3;
+    this.snakeTail = 0;
+    this.snakeHead = 2;
+    this.snakeX[0] = 6;
+    this.snakeY[0] = 10;
+    this.snakeX[1] = 7;
+    this.snakeY[1] = 10;
+    this.snakeX[2] = 8;
+    this.snakeY[2] = 10;
+    this.dir = { x: 1, y: 0 };
+    this.nextDir = { ...this.dir };
+    this.score = 0;
+    this.paused = false;
+    this.gameOver = false;
+    this.food = this.emptyCell();
+
+    if (!this.difficultyChosen) {
+      this.tickMs = this.DIFF.normal.start;
+      this.running = false;
+      return;
+    }
+
+    const cfg = this.tickCfg();
+    this.tickMs = cfg.start;
+    this.running = true;
+  }
+}
+
+// ========== VIEW ==========
+class SnakeView {
+  constructor(model) {
+    this.model = model;
+    this.canvas = document.getElementById("game");
+    this.ctx = this.canvas.getContext("2d");
+    this.canvasWrap = document.getElementById("canvasWrap");
+    this.boostBar = document.getElementById("boostBar");
+
+    this.scoreEl = document.getElementById("score");
+    this.bestEl = document.getElementById("best");
+    this.overlay = document.getElementById("overlay");
+    this.overlayTitle = document.getElementById("overlayTitle");
+    this.overlayMsg = document.getElementById("overlayMsg");
+    this.overlayDefaultActions = document.getElementById("overlayDefaultActions");
+    this.btnOverlay = document.getElementById("btnOverlay");
+    this.btnRestart = document.getElementById("btnRestart");
+    this.btnPause = document.getElementById("btnPause");
+    this.btnSound = document.getElementById("btnSound");
+    this.pageDifficulty = document.getElementById("pageDifficulty");
+    this.pageStandard = document.getElementById("pageStandard");
+    this.pillDifficulty = document.getElementById("pillDifficulty");
+    this.diffLabel = document.getElementById("diffLabel");
+    this.controlsHintTouch = document.getElementById("controlsHintTouch");
+    this.touchUp = document.getElementById("touchUp");
+    this.touchDown = document.getElementById("touchDown");
+    this.touchLeft = document.getElementById("touchLeft");
+    this.touchRight = document.getElementById("touchRight");
+    this.touchPause = document.getElementById("touchPause");
+    this.lbBody = document.getElementById("lbBody");
+    this.lbEmpty = document.getElementById("lbEmpty");
+    this.lbTable = document.getElementById("lbTable");
+    this.overlayGameOver = document.getElementById("overlayGameOver");
+    this.goScoreLine = document.getElementById("goScoreLine");
+    this.playerName = document.getElementById("playerName");
+    this.btnSaveLb = document.getElementById("btnSaveLb");
+    this.btnSkipLb = document.getElementById("btnSkipLb");
+
+    this.LOGICAL = 360;
+    this.CELL = this.LOGICAL / this.model.COLS;
+    this.applyCanvasResolution();
+  }
+
+  applyCanvasResolution() {
+    const rect = this.canvasWrap.getBoundingClientRect();
+    let w = Math.floor(rect.width);
+    if (!w || w < 200) w = 280;
+    w = Math.min(w, 560);
+    this.LOGICAL = w;
+    this.CELL = this.LOGICAL / this.model.COLS;
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    this.canvas.width = Math.round(this.LOGICAL * dpr);
+    this.canvas.height = Math.round(this.LOGICAL * dpr);
+    this.ctx.setTransform(1, 0, 0, 1, 0, 0);
+    this.ctx.scale(dpr, dpr);
+  }
+
+  updateScoreUI(score) {
+    this.scoreEl.textContent = String(score);
+  }
+
+  updateHighScoreUI(best) {
+    this.bestEl.textContent = String(best);
+  }
+
+  updateDiffLabel(name) {
+    this.diffLabel.textContent = name;
+    this.pillDifficulty.hidden = false;
+  }
+
+  hideDiffPill() {
+    this.pillDifficulty.hidden = true;
+  }
+
+  renderLeaderboard(rows) {
+    rows = rows
       .filter((r) => r && typeof r.score === "number")
       .sort((a, b) => b.score - a.score)
       .slice(0, 10);
 
-    lbBody.textContent = "";
+    this.lbBody.textContent = "";
     if (!rows.length) {
-      lbTable.style.display = "none";
-      lbEmpty.style.display = "block";
+      this.lbTable.style.display = "none";
+      this.lbEmpty.style.display = "block";
       return;
     }
-    lbTable.style.display = "table";
-    lbEmpty.style.display = "none";
+    this.lbTable.style.display = "table";
+    this.lbEmpty.style.display = "none";
 
     rows.forEach((r, i) => {
       const tr = document.createElement("tr");
@@ -786,395 +1042,186 @@
       scTd.className = "pts";
       scTd.textContent = String(r.score);
       tr.append(rankTd, nameTd, scTd);
-      lbBody.appendChild(tr);
+      this.lbBody.appendChild(tr);
     });
   }
 
-  function loadBest() {
-    const v = parseInt(localStorage.getItem(BEST_KEY) || "0", 10);
-    bestEl.textContent = Number.isFinite(v) ? v : 0;
+  showStartScreen() {
+    this.pageDifficulty.hidden = false;
+    this.pageStandard.hidden = true;
+    this.overlayGameOver.hidden = true;
+    this.overlay.classList.add("visible");
   }
 
-  function saveBest() {
-    const best = parseInt(bestEl.textContent, 10) || 0;
-    if (score > best) {
-      bestEl.textContent = String(score);
-      localStorage.setItem(BEST_KEY, String(score));
-    }
+  showPauseScreen(title, msg) {
+    this.overlayTitle.textContent = title;
+    this.overlayMsg.textContent = msg;
+    this.btnOverlay.style.display = "inline-flex";
+    this.pageDifficulty.hidden = true;
+    this.overlayGameOver.hidden = true;
+    this.pageStandard.hidden = false;
+    this.overlay.classList.add("visible");
   }
 
-  function randInt(n) {
-    return Math.floor(Math.random() * n);
+  showGameOverScreen(reason, score) {
+    this.pageDifficulty.hidden = true;
+    this.pageStandard.hidden = true;
+    this.overlayGameOver.hidden = false;
+    this.goScoreLine.textContent = reason + " · 本局 " + score + " 分";
+    this.overlay.classList.add("visible");
   }
 
-  function spawnEatParticles(cx, cy) {
-    const n = 22 + randInt(14);
-    for (let i = 0; i < n; i++) {
-      const a = Math.random() * Math.PI * 2;
-      const sp = LOGICAL * 0.0055 * (1.1 + Math.random() * 2.4);
-      const roll = Math.random();
-      const rgb = roll < 0.38 ? "167,139,250" : roll < 0.72 ? "52,211,153" : "251,113,133";
-      particles.push({
-        x: cx,
-        y: cy,
-        vx: Math.cos(a) * sp,
-        vy: Math.sin(a) * sp,
-        life: 1,
-        rgb,
-      });
-    }
+  hideOverlay() {
+    this.overlay.classList.remove("visible");
+    this.pageDifficulty.hidden = true;
+    this.pageStandard.hidden = true;
+    this.overlayGameOver.hidden = true;
+    this.overlayMsg.style.display = "block";
+    this.overlayDefaultActions.style.display = "flex";
   }
 
-  function stepParticles(dt) {
-    if (!particles.length) return;
-    const decay = dt * 0.0011;
-    for (const p of particles) {
-      p.x += p.vx;
-      p.y += p.vy;
-      p.vx *= 0.965;
-      p.vy *= 0.965;
-      p.life -= decay;
-    }
-    particles = particles.filter((p) => p.life > 0.03);
+  syncBoostUi(isBoosting, isBarHeld) {
+    this.canvasWrap.classList.toggle("boost-hold", isBoosting);
+    if (this.boostBar) this.boostBar.classList.toggle("is-pressing", isBarHeld);
   }
 
-  function drawParticles() {
-    if (!particles.length) return;
-    ctx.save();
-    ctx.globalCompositeOperation = "lighter";
-    for (const p of particles) {
-      const rad = CELL * 0.14 * Math.sqrt(p.life);
-      const g = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, rad * 4);
-      g.addColorStop(0, `rgba(${p.rgb},${0.7 * p.life})`);
-      g.addColorStop(0.35, `rgba(${p.rgb},${0.35 * p.life})`);
-      g.addColorStop(1, "rgba(0,0,0,0)");
-      ctx.fillStyle = g;
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, rad * 4, 0, Math.PI * 2);
-      ctx.fill();
-    }
-    ctx.restore();
+  syncPauseLabels(isPaused) {
+    const t = isPaused ? "继续" : "暂停";
+    this.btnPause.textContent = t;
+    this.touchPause.textContent = t;
+    this.touchPause.setAttribute("aria-label", isPaused ? "继续游戏" : "暂停游戏");
   }
 
-  function emptyCell() {
-    const occupied = new Set(snake.map((s) => s.x + "," + s.y));
-    for (const k of fixedObstacleSet) occupied.add(k);
-    if (tempObstacleActive()) occupied.add(tempObstacle.x + "," + tempObstacle.y);
-    let x, y, guard = 0;
-    do {
-      x = randInt(COLS);
-      y = randInt(ROWS);
-      guard++;
-    } while (occupied.has(x + "," + y) && guard < COLS * ROWS * 3);
-    return { x, y };
+  syncSoundButton(isMuted) {
+    this.btnSound.textContent = isMuted ? "音效：关" : "音效：开";
+    this.btnSound.setAttribute("aria-pressed", isMuted ? "true" : "false");
   }
 
-  function showPageDifficulty() {
-    pageDifficulty.hidden = false;
-    pageStandard.hidden = true;
-    overlayGameOver.hidden = true;
-    overlay.classList.add("visible");
-  }
-
-  function showOverlay(title, msg) {
-    overlayTitle.textContent = title;
-    overlayMsg.textContent = msg;
-    btnOverlay.style.display = "inline-flex";
-    pageDifficulty.hidden = true;
-    overlayGameOver.hidden = true;
-    pageStandard.hidden = false;
-    overlay.classList.add("visible");
-  }
-
-  function showGameOverPage() {
-    pageDifficulty.hidden = true;
-    pageStandard.hidden = true;
-    overlayGameOver.hidden = false;
-    overlay.classList.add("visible");
-  }
-
-  function hideOverlay() {
-    overlay.classList.remove("visible");
-    pageDifficulty.hidden = true;
-    pageStandard.hidden = true;
-    overlayGameOver.hidden = true;
-    overlayMsg.style.display = "block";
-    overlayDefaultActions.style.display = "flex";
-    pendingLbScore = null;
-  }
-
-  function tickCfg() {
-    return DIFF[currentDifficulty] || DIFF.normal;
-  }
-
-  function syncPauseLabels() {
-    const t = paused ? "继续" : "暂停";
-    btnPause.textContent = t;
-    touchPause.textContent = t;
-    touchPause.setAttribute("aria-label", paused ? "继续游戏" : "暂停游戏");
-  }
-
-  function syncTouchHint() {
+  syncTouchHint() {
     const mq = window.matchMedia("(pointer: coarse), (max-width: 720px)");
-    controlsHintTouch.hidden = !mq.matches;
+    this.controlsHintTouch.hidden = !mq.matches;
   }
 
-  function openGameOver(reason) {
-    stopObstacleSpawner();
-    boostKey = false;
-    boostPointer = false;
-    if (swipePointerId != null) {
-      try {
-        canvasWrap.releasePointerCapture(swipePointerId);
-      } catch (_) {}
-      swipePointerId = null;
-    }
-    syncBoostUi();
-    saveBest();
-    sfxDie();
-    pendingLbScore = score;
-    goScoreLine.textContent = reason + " · 本局 " + score + " 分";
-    playerName.value = localStorage.getItem("snake-last-name") || "";
-    showGameOverPage();
-    syncPauseLabels();
+  focusPlayerName() {
     try {
-      playerName.focus({ preventScroll: true });
+      this.playerName.focus({ preventScroll: true });
     } catch {
-      playerName.focus();
+      this.playerName.focus();
     }
   }
 
-  function submitLeaderboard() {
-    if (pendingLbScore == null) return;
-    const name = (playerName.value || "匿名").trim() || "匿名";
-    localStorage.setItem("snake-last-name", name.slice(0, 12));
-    const row = { name: name.slice(0, 12), score: pendingLbScore, ts: Date.now() };
-    const rows = loadLeaderboard();
-    rows.push(row);
-    rows.sort((a, b) => b.score - a.score);
-    saveLeaderboard(rows);
-    renderLeaderboard();
-    pendingLbScore = null;
-    resetGame();
+  roundCellRect(x, y, pad, rMul) {
+    const px = x * this.CELL + pad;
+    const py = y * this.CELL + pad;
+    const s = this.CELL - pad * 2;
+    const r = Math.min(this.CELL * 0.32, s * (rMul || 0.28));
+    return { px, py, s, r };
   }
 
-  function skipLeaderboard() {
-    pendingLbScore = null;
-    resetGame();
-  }
-
-  function pickDifficulty(key) {
-    if (!DIFF[key]) return;
-    currentDifficulty = key;
-    difficultyChosen = true;
-    pillDifficulty.hidden = false;
-    diffLabel.textContent = DIFF_NAMES[key];
-    resetGame();
-  }
-
-  function resetGame() {
-    stopObstacleSpawner();
-    particles = [];
-    boostKey = false;
-    boostPointer = false;
-    swipePointerId = null;
-    syncBoostUi();
-    snake = [
-      { x: 8, y: 10 },
-      { x: 7, y: 10 },
-      { x: 6, y: 10 },
-    ];
-    dir = { x: 1, y: 0 };
-    nextDir = { ...dir };
-    score = 0;
-    paused = false;
-    gameOver = false;
-    food = emptyCell();
-    scoreEl.textContent = "0";
-
-    if (!difficultyChosen) {
-      tickMs = DIFF.normal.start;
-      running = false;
-      showPageDifficulty();
-      loadBest();
-      syncPauseLabels();
-      return;
-    }
-
-    const cfg = tickCfg();
-    tickMs = cfg.start;
-    running = true;
-    hideOverlay();
-    lastTick = performance.now();
-    lastRafTime = performance.now();
-    loadBest();
-    sfxStart();
-    syncPauseLabels();
-    startObstacleSpawner();
-  }
-
-  function opposite(a, b) {
-    return a.x === -b.x && a.y === -b.y;
-  }
-
-  function step() {
-    if (!running || paused || gameOver) return;
-
-    dir = { ...nextDir };
-    const head = snake[0];
-    const nh = { x: head.x + dir.x, y: head.y + dir.y };
-
-    if (nh.x < 0 || nh.x >= COLS || nh.y < 0 || nh.y >= ROWS) {
-      gameOver = true;
-      openGameOver("撞墙");
-      return;
-    }
-
-    if (blockedByObstacle(nh)) {
-      gameOver = true;
-      openGameOver("撞到障碍");
-      return;
-    }
-
-    const eating = nh.x === food.x && nh.y === food.y;
-    const bodyCheck = eating ? snake : snake.slice(0, -1);
-    for (let i = 0; i < bodyCheck.length; i++) {
-      if (bodyCheck[i].x === nh.x && bodyCheck[i].y === nh.y) {
-        gameOver = true;
-        openGameOver("咬到自己");
-        return;
-      }
-    }
-
-    snake.unshift(nh);
-
-    if (eating) {
-      const fcx = food.x * CELL + CELL * 0.5;
-      const fcy = food.y * CELL + CELL * 0.5;
-      spawnEatParticles(fcx, fcy);
-      score += 10;
-      scoreEl.textContent = String(score);
-      food = emptyCell();
-      const cfg = tickCfg();
-      tickMs = Math.max(cfg.min, tickMs - cfg.step);
-      sfxEat();
-    } else {
-      snake.pop();
-    }
-  }
-
-  function drawBoard() {
+  drawBoard() {
     const bg = getComputedStyle(document.documentElement).getPropertyValue("--canvas-bg").trim() || "#0c0e14";
-    const g = ctx.createRadialGradient(
-      LOGICAL * 0.35,
-      LOGICAL * 0.25,
+    const g = this.ctx.createRadialGradient(
+      this.LOGICAL * 0.35,
+      this.LOGICAL * 0.25,
       0,
-      LOGICAL * 0.5,
-      LOGICAL * 0.5,
-      LOGICAL * 0.85
+      this.LOGICAL * 0.5,
+      this.LOGICAL * 0.5,
+      this.LOGICAL * 0.85
     );
     g.addColorStop(0, "rgba(167, 139, 250, 0.09)");
     g.addColorStop(0.45, bg);
     g.addColorStop(1, "#05060a");
-    ctx.fillStyle = g;
-    ctx.fillRect(0, 0, LOGICAL, LOGICAL);
+    this.ctx.fillStyle = g;
+    this.ctx.fillRect(0, 0, this.LOGICAL, this.LOGICAL);
 
     const t0 = (x, y) => ((x + y) & 1) === 0;
-    for (let x = 0; x < COLS; x++) {
-      for (let y = 0; y < ROWS; y++) {
+    for (let x = 0; x < this.model.COLS; x++) {
+      for (let y = 0; y < this.model.ROWS; y++) {
         if (t0(x, y)) {
-          ctx.fillStyle = "rgba(255,255,255,0.018)";
-          ctx.fillRect(x * CELL, y * CELL, CELL, CELL);
+          this.ctx.fillStyle = "rgba(255,255,255,0.018)";
+          this.ctx.fillRect(x * this.CELL, y * this.CELL, this.CELL, this.CELL);
         }
       }
     }
 
-    ctx.strokeStyle = "rgba(255,255,255,0.04)";
-    ctx.lineWidth = 1;
-    for (let x = 0; x <= COLS; x++) {
-      ctx.beginPath();
-      ctx.moveTo(x * CELL + 0.5, 0);
-      ctx.lineTo(x * CELL + 0.5, LOGICAL);
-      ctx.stroke();
+    this.ctx.strokeStyle = "rgba(255,255,255,0.04)";
+    this.ctx.lineWidth = 1;
+    for (let x = 0; x <= this.model.COLS; x++) {
+      this.ctx.beginPath();
+      this.ctx.moveTo(x * this.CELL + 0.5, 0);
+      this.ctx.lineTo(x * this.CELL + 0.5, this.LOGICAL);
+      this.ctx.stroke();
     }
-    for (let y = 0; y <= ROWS; y++) {
-      ctx.beginPath();
-      ctx.moveTo(0, y * CELL + 0.5);
-      ctx.lineTo(LOGICAL, y * CELL + 0.5);
-      ctx.stroke();
+    for (let y = 0; y <= this.model.ROWS; y++) {
+      this.ctx.beginPath();
+      this.ctx.moveTo(0, y * this.CELL + 0.5);
+      this.ctx.lineTo(this.LOGICAL, y * this.CELL + 0.5);
+      this.ctx.stroke();
     }
 
-    ctx.strokeStyle = "rgba(255,255,255,0.14)";
-    ctx.strokeRect(0.5, 0.5, LOGICAL - 1, LOGICAL - 1);
+    this.ctx.strokeStyle = "rgba(255,255,255,0.14)";
+    this.ctx.strokeRect(0.5, 0.5, this.LOGICAL - 1, this.LOGICAL - 1);
   }
 
-  function roundCellRect(x, y, pad, rMul) {
-    const px = x * CELL + pad;
-    const py = y * CELL + pad;
-    const s = CELL - pad * 2;
-    const r = Math.min(CELL * 0.32, s * (rMul || 0.28));
-    return { px, py, s, r };
-  }
-
-  function drawFixedObstacles() {
-    for (const o of FIXED_OBSTACLES) {
-      const { px, py, s, r } = roundCellRect(o.x, o.y, CELL * 0.12, 0.22);
-      const grd = ctx.createLinearGradient(px, py, px + s, py + s);
+  drawFixedObstacles() {
+    for (const o of this.model.FIXED_OBSTACLES) {
+      const { px, py, s, r } = this.roundCellRect(o.x, o.y, this.CELL * 0.12, 0.22);
+      const grd = this.ctx.createLinearGradient(px, py, px + s, py + s);
       grd.addColorStop(0, "#4b5563");
       grd.addColorStop(1, "#1f2937");
-      ctx.fillStyle = grd;
-      ctx.beginPath();
-      ctx.roundRect(px, py, s, s, r);
-      ctx.fill();
-      ctx.strokeStyle = "rgba(255,255,255,0.12)";
-      ctx.lineWidth = 1;
-      ctx.stroke();
+      this.ctx.fillStyle = grd;
+      this.ctx.beginPath();
+      this.ctx.roundRect(px, py, s, s, r);
+      this.ctx.fill();
+      this.ctx.strokeStyle = "rgba(255,255,255,0.12)";
+      this.ctx.lineWidth = 1;
+      this.ctx.stroke();
     }
   }
 
-  function drawTempObstacle() {
-    if (!tempObstacleActive()) return;
-    const o = tempObstacle;
+  drawTempObstacle() {
+    if (!this.model.tempObstacleActive()) return;
+    const o = this.model.tempObstacle;
     const pulse = 0.85 + 0.15 * Math.sin(performance.now() / 220);
-    const { px, py, s, r } = roundCellRect(o.x, o.y, CELL * 0.1, 0.26);
-    const grd = ctx.createRadialGradient(px + s * 0.35, py + s * 0.35, 0, px + s * 0.5, py + s * 0.5, s * 0.75);
+    const { px, py, s, r } = this.roundCellRect(o.x, o.y, this.CELL * 0.1, 0.26);
+    const grd = this.ctx.createRadialGradient(px + s * 0.35, py + s * 0.35, 0, px + s * 0.5, py + s * 0.5, s * 0.75);
     grd.addColorStop(0, `rgba(251, 191, 36, ${0.55 * pulse})`);
     grd.addColorStop(0.6, `rgba(249, 115, 22, ${0.85 * pulse})`);
     grd.addColorStop(1, "rgba(185, 28, 28, 0.95)");
-    ctx.fillStyle = grd;
-    ctx.beginPath();
-    ctx.roundRect(px, py, s, s, r);
-    ctx.fill();
-    ctx.strokeStyle = "rgba(255,255,255,0.35)";
-    ctx.lineWidth = 1.25;
-    ctx.stroke();
+    this.ctx.fillStyle = grd;
+    this.ctx.beginPath();
+    this.ctx.roundRect(px, py, s, s, r);
+    this.ctx.fill();
+    this.ctx.strokeStyle = "rgba(255,255,255,0.35)";
+    this.ctx.lineWidth = 1.25;
+    this.ctx.stroke();
   }
 
-  function drawFood() {
-    const { px, py, s, r } = roundCellRect(food.x, food.y, CELL * 0.14, 0.3);
+  drawFood() {
+    const { px, py, s, r } = this.roundCellRect(this.model.food.x, this.model.food.y, this.CELL * 0.14, 0.3);
     const breathe = 1 + 0.04 * Math.sin(performance.now() / 350);
     const cx = px + s / 2;
     const cy = py + s / 2;
     const rs = (s / 2) * breathe;
-    ctx.save();
-    ctx.shadowBlur = CELL * 0.55;
-    ctx.shadowColor = "rgba(251, 113, 133, 0.75)";
-    const rg = ctx.createRadialGradient(cx - rs * 0.25, cy - rs * 0.25, 0, cx, cy, rs * 1.2);
+    this.ctx.save();
+    this.ctx.shadowBlur = this.CELL * 0.55;
+    this.ctx.shadowColor = "rgba(251, 113, 133, 0.75)";
+    const rg = this.ctx.createRadialGradient(cx - rs * 0.25, cy - rs * 0.25, 0, cx, cy, rs * 1.2);
     rg.addColorStop(0, "#ffe4e6");
     rg.addColorStop(0.4, "#fb7185");
     rg.addColorStop(1, "#9f1239");
-    ctx.fillStyle = rg;
-    ctx.beginPath();
-    ctx.roundRect(px, py, s, s, r);
-    ctx.fill();
-    ctx.shadowBlur = 0;
-    ctx.strokeStyle = "rgba(255,255,255,0.35)";
-    ctx.lineWidth = 1.15;
-    ctx.stroke();
-    ctx.restore();
+    this.ctx.fillStyle = rg;
+    this.ctx.beginPath();
+    this.ctx.roundRect(px, py, s, s, r);
+    this.ctx.fill();
+    this.ctx.shadowBlur = 0;
+    this.ctx.strokeStyle = "rgba(255,255,255,0.35)";
+    this.ctx.lineWidth = 1.15;
+    this.ctx.stroke();
+    this.ctx.restore();
   }
 
-  function drawSnakeEyes(px, py, s, face) {
+  drawSnakeEyes(px, py, s, face) {
     const ex = s * 0.22;
     const ey = s * 0.28;
     const er = Math.max(1.8, s * 0.11);
@@ -1186,54 +1233,59 @@
     if (face.y === -1) oy = -s * 0.12;
     const bx = px + s * 0.5 + ox;
     const by = py + s * 0.42 + oy;
-    ctx.fillStyle = "#f8fafc";
-    ctx.beginPath();
-    ctx.arc(bx - ex, by, er, 0, Math.PI * 2);
-    ctx.arc(bx + ex, by, er, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = "#0f172a";
+    this.ctx.fillStyle = "#f8fafc";
+    this.ctx.beginPath();
+    this.ctx.arc(bx - ex, by, er, 0, Math.PI * 2);
+    this.ctx.arc(bx + ex, by, er, 0, Math.PI * 2);
+    this.ctx.fill();
+    this.ctx.fillStyle = "#0f172a";
     const pup = s * 0.045;
-    ctx.beginPath();
-    ctx.arc(bx - ex + face.x * pup * 0.5, by + face.y * pup * 0.5, er * 0.45, 0, Math.PI * 2);
-    ctx.arc(bx + ex + face.x * pup * 0.5, by + face.y * pup * 0.5, er * 0.45, 0, Math.PI * 2);
-    ctx.fill();
+    this.ctx.beginPath();
+    this.ctx.arc(bx - ex + face.x * pup * 0.5, by + face.y * pup * 0.5, er * 0.45, 0, Math.PI * 2);
+    this.ctx.arc(bx + ex + face.x * pup * 0.5, by + face.y * pup * 0.5, er * 0.45, 0, Math.PI * 2);
+    this.ctx.fill();
   }
 
-  function drawSnake() {
-    const face = nextDir.x || nextDir.y ? nextDir : dir;
-    const n = snake.length;
-    ctx.save();
+  drawSnake() {
+    const face = this.model.nextDir.x || this.model.nextDir.y ? this.model.nextDir : this.model.dir;
+    const n = this.model.snakeLen;
+    if (n <= 0) return;
+    this.ctx.save();
     const glowLayers = [
-      { blur: CELL * 0.95, col: "rgba(167, 139, 250, 0.28)" },
-      { blur: CELL * 0.42, col: "rgba(52, 211, 153, 0.42)" },
+      { blur: this.CELL * 0.95, col: "rgba(167, 139, 250, 0.28)" },
+      { blur: this.CELL * 0.42, col: "rgba(52, 211, 153, 0.42)" },
     ];
     for (const gl of glowLayers) {
-      ctx.shadowBlur = gl.blur;
-      ctx.shadowColor = gl.col;
-      for (let i = n - 1; i >= 0; i--) {
-        const seg = snake[i];
-        const isHead = i === 0;
-        const pad = isHead ? CELL * 0.11 : CELL * 0.13;
-        const { px, py, s, r } = roundCellRect(seg.x, seg.y, pad, isHead ? 0.3 : 0.26);
-        const t = n <= 1 ? 0 : i / (n - 1);
-        const lg = ctx.createLinearGradient(px - s * 0.15, py, px + s * 1.1, py + s * 1.05);
+      this.ctx.shadowBlur = gl.blur;
+      this.ctx.shadowColor = gl.col;
+      for (let k = 0; k < n; k++) {
+        const idx = (this.model.snakeTail + k) % this.model.SNAKE_CAP;
+        const sx = this.model.snakeX[idx];
+        const sy = this.model.snakeY[idx];
+        const isHead = k === n - 1;
+        const pad = isHead ? this.CELL * 0.11 : this.CELL * 0.13;
+        const { px, py, s, r } = this.roundCellRect(sx, sy, pad, isHead ? 0.3 : 0.26);
+        const t = n <= 1 ? 0 : (n - 1 - k) / (n - 1);
+        const lg = this.ctx.createLinearGradient(px - s * 0.15, py, px + s * 1.1, py + s * 1.05);
         lg.addColorStop(0, `rgba(196, 181, 253, ${0.45 + t * 0.35})`);
         lg.addColorStop(0.5, `rgba(45, 212, 191, ${0.4 + t * 0.38})`);
         lg.addColorStop(1, `rgba(244, 114, 182, ${0.35 + t * 0.4})`);
-        ctx.fillStyle = lg;
-        ctx.beginPath();
-        ctx.roundRect(px, py, s, s, r);
-        ctx.fill();
+        this.ctx.fillStyle = lg;
+        this.ctx.beginPath();
+        this.ctx.roundRect(px, py, s, s, r);
+        this.ctx.fill();
       }
     }
-    ctx.shadowBlur = 0;
-    for (let i = n - 1; i >= 0; i--) {
-      const seg = snake[i];
-      const isHead = i === 0;
-      const pad = isHead ? CELL * 0.11 : CELL * 0.13;
-      const { px, py, s, r } = roundCellRect(seg.x, seg.y, pad, isHead ? 0.3 : 0.26);
-      const t = n <= 1 ? 0 : i / (n - 1);
-      const lg = ctx.createLinearGradient(px - s * 0.25, py - s * 0.2, px + s * 1.05, py + s * 1.15);
+    this.ctx.shadowBlur = 0;
+    for (let k = 0; k < n; k++) {
+      const idx = (this.model.snakeTail + k) % this.model.SNAKE_CAP;
+      const sx = this.model.snakeX[idx];
+      const sy = this.model.snakeY[idx];
+      const isHead = k === n - 1;
+      const pad = isHead ? this.CELL * 0.11 : this.CELL * 0.13;
+      const { px, py, s, r } = this.roundCellRect(sx, sy, pad, isHead ? 0.3 : 0.26);
+      const t = n <= 1 ? 0 : (n - 1 - k) / (n - 1);
+      const lg = this.ctx.createLinearGradient(px - s * 0.25, py - s * 0.2, px + s * 1.05, py + s * 1.15);
       if (isHead) {
         lg.addColorStop(0, "#f5d0fe");
         lg.addColorStop(0.42, "#34d399");
@@ -1243,98 +1295,230 @@
         lg.addColorStop(0.48, `rgba(52, 211, 153, ${0.55 + t * 0.32})`);
         lg.addColorStop(1, `rgba(244, 114, 182, ${0.62 - t * 0.18})`);
       }
-      ctx.fillStyle = lg;
-      ctx.beginPath();
-      ctx.roundRect(px, py, s, s, r);
-      ctx.fill();
-      ctx.strokeStyle = isHead ? "rgba(255,255,255,0.5)" : "rgba(255,255,255,0.16)";
-      ctx.lineWidth = isHead ? 1.65 : 1.05;
-      ctx.stroke();
-      if (isHead) drawSnakeEyes(px, py, s, face);
+      this.ctx.fillStyle = lg;
+      this.ctx.beginPath();
+      this.ctx.roundRect(px, py, s, s, r);
+      this.ctx.fill();
+      this.ctx.strokeStyle = isHead ? "rgba(255,255,255,0.5)" : "rgba(255,255,255,0.16)";
+      this.ctx.lineWidth = isHead ? 1.65 : 1.05;
+      this.ctx.stroke();
+      if (isHead) this.drawSnakeEyes(px, py, s, face);
     }
-    ctx.restore();
+    this.ctx.restore();
   }
 
-  function draw() {
-    drawBoard();
-    drawFixedObstacles();
-    drawTempObstacle();
-    drawFood();
-    drawSnake();
-    drawParticles();
+  drawParticles() {
+    if (!this.model.particles.length) return;
+    this.ctx.save();
+    this.ctx.globalCompositeOperation = "lighter";
+    for (const p of this.model.particles) {
+      const rad = this.CELL * 0.14 * Math.sqrt(p.life);
+      const g = this.ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, rad * 4);
+      g.addColorStop(0, `rgba(${p.rgb},${0.7 * p.life})`);
+      g.addColorStop(0.35, `rgba(${p.rgb},${0.35 * p.life})`);
+      g.addColorStop(1, "rgba(0,0,0,0)");
+      this.ctx.fillStyle = g;
+      this.ctx.beginPath();
+      this.ctx.arc(p.x, p.y, rad * 4, 0, Math.PI * 2);
+      this.ctx.fill();
+    }
+    this.ctx.restore();
   }
 
-  let lastRafTime = performance.now();
+  renderCanvas() {
+    this.drawBoard();
+    this.drawFixedObstacles();
+    this.drawTempObstacle();
+    this.drawFood();
+    this.drawSnake();
+    this.drawParticles();
+  }
+}
 
-  function loop(now) {
-    requestAnimationFrame(loop);
-    const dt = Math.min(40, now - lastRafTime);
-    lastRafTime = now;
-    stepParticles(dt);
-    syncBoostUi();
+// ========== CONTROLLER ==========
+class SnakeController {
+  constructor() {
+    this.model = new SnakeModel();
+    this.view = new SnakeView(this.model);
+    this.lastRafTime = performance.now();
+    this.lastTick = performance.now();
+    this.swipePointerId = null;
+    this.swipeStartX = 0;
+    this.swipeStartY = 0;
+    this.boostBarPointerId = null;
+  }
 
-    if (!running) {
-      draw();
+  init() {
+    if (!CanvasRenderingContext2D.prototype.roundRect) {
+      CanvasRenderingContext2D.prototype.roundRect = function (x, y, w, h, r) {
+        const rr = Math.min(r, w / 2, h / 2);
+        this.moveTo(x + rr, y);
+        this.arcTo(x + w, y, x + w, y + h, rr);
+        this.arcTo(x + w, y + h, x, y + h, rr);
+        this.arcTo(x, y + h, x, y, rr);
+        this.arcTo(x, y, x + w, y, rr);
+        this.closePath();
+      };
+    }
+
+    this.bindEvents();
+    this.view.syncSoundButton(this.model.soundMuted);
+    this.view.renderLeaderboard(this.model.loadLeaderboard());
+    this.view.syncTouchHint();
+    this.view.syncPauseLabels(false);
+    this.resetGame();
+    requestAnimationFrame((t) => this.gameLoop(t));
+  }
+
+  bindEvents() {
+    this.view.btnRestart.addEventListener("click", () => this.resetGame());
+    this.view.btnPause.addEventListener("click", () => {
+      this.model.resumeAudio();
+      this.togglePause();
+    });
+    this.view.btnOverlay.addEventListener("click", () => {
+      this.model.paused = false;
+      this.model.resumeObstacleAfterPause();
+      this.view.hideOverlay();
+      this.view.syncPauseLabels(false);
+    });
+    this.view.btnSound.addEventListener("click", () => {
+      this.model.soundMuted = !this.model.soundMuted;
+      localStorage.setItem(this.model.MUTE_KEY, this.model.soundMuted ? "1" : "0");
+      this.view.syncSoundButton(this.model.soundMuted);
+      if (!this.model.soundMuted) this.model.resumeAudio();
+    });
+    this.view.btnSaveLb.addEventListener("click", () => this.submitLeaderboard());
+    this.view.btnSkipLb.addEventListener("click", () => this.skipLeaderboard());
+
+    this.view.playerName.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        this.submitLeaderboard();
+      }
+    });
+
+    document.querySelectorAll("[data-diff]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        this.model.resumeAudio();
+        this.pickDifficulty(btn.getAttribute("data-diff"));
+      });
+    });
+
+    this.bindDirButton(this.view.touchUp, { x: 0, y: -1 });
+    this.bindDirButton(this.view.touchDown, { x: 0, y: 1 });
+    this.bindDirButton(this.view.touchLeft, { x: -1, y: 0 });
+    this.bindDirButton(this.view.touchRight, { x: 1, y: 0 });
+
+    this.view.touchPause.addEventListener("pointerdown", (ev) => {
+      if (ev.pointerType === "mouse" && ev.button !== 0) return;
+      ev.preventDefault();
+      this.model.resumeAudio();
+      this.togglePause();
+    }, { passive: false });
+
+    this.view.canvasWrap.addEventListener("pointerdown", (ev) => this.onWrapPointerDown(ev), { passive: false });
+    this.view.canvasWrap.addEventListener("pointermove", (ev) => this.onWrapPointerMove(ev));
+    this.view.canvasWrap.addEventListener("pointerup", (ev) => this.onWrapPointerUp(ev));
+    this.view.canvasWrap.addEventListener("pointercancel", (ev) => this.onWrapPointerUp(ev));
+    this.view.canvasWrap.addEventListener("lostpointercapture", (ev) => this.onWrapPointerUp(ev));
+
+    this.view.boostBar.addEventListener("pointerdown", (ev) => this.onBoostBarDown(ev), { passive: false });
+    this.view.boostBar.addEventListener("pointerup", (ev) => this.onBoostBarUp(ev));
+    this.view.boostBar.addEventListener("pointercancel", (ev) => this.onBoostBarUp(ev));
+    this.view.boostBar.addEventListener("lostpointercapture", (ev) => this.onBoostBarUp(ev));
+
+    window.addEventListener("blur", () => {
+      this.model.boostKey = false;
+      this.model.boostBarHeld = false;
+      this.boostBarPointerId = null;
+      this.view.syncBoostUi(false, false);
+    });
+
+    window.addEventListener("keydown", (e) => this.handleKeydown(e));
+    window.addEventListener("keyup", (e) => this.handleKeyup(e));
+
+    window.addEventListener("resize", () => {
+      this.view.applyCanvasResolution();
+      this.model.setWorldSize(this.view.LOGICAL, this.view.CELL);
+      this.view.syncTouchHint();
+    });
+
+    if (typeof ResizeObserver !== "undefined") {
+      const ro = new ResizeObserver(() => {
+        this.view.applyCanvasResolution();
+        this.model.setWorldSize(this.view.LOGICAL, this.view.CELL);
+      });
+      ro.observe(this.view.canvasWrap);
+    }
+
+    ["click", "touchstart"].forEach((ev) => {
+      document.body.addEventListener(ev, () => this.model.resumeAudio(), { passive: true });
+    });
+  }
+
+  bindDirButton(el, vec) {
+    el.addEventListener("pointerdown", (ev) => {
+      if (ev.pointerType === "mouse" && ev.button !== 0) return;
+      ev.preventDefault();
+      this.model.resumeAudio();
+      this.trySetDirection(vec);
+    }, { passive: false });
+  }
+
+  gameLoop(now) {
+    Date.now();
+    console.log(Date.now());
+    requestAnimationFrame((t) => this.gameLoop(t));
+
+    const dt = Math.min(40, now - this.lastRafTime);
+    this.lastRafTime = now;
+
+    this.model.stepParticles(dt);
+    this.view.syncBoostUi(this.model.isBoosting(), this.model.boostBarHeld);
+
+    if (!this.model.running) {
+      this.view.renderCanvas();
       return;
     }
-    if (gameOver) {
-      draw();
+    if (this.model.gameOver) {
+      this.view.renderCanvas();
       return;
     }
-    if (paused) {
-      draw();
+    if (this.model.paused) {
+      this.view.renderCanvas();
       return;
     }
-    if (tempObstacle && performance.now() >= tempObstacle.until) tempObstacle = null;
+
+    this.model.expireTempObstacle();
+
     let guard = 0;
     while (guard++ < 16) {
-      const stepInt = tickMs * (isBoosting() ? BOOST_TICK_MUL : 1);
-      if (now - lastTick < stepInt) break;
-      lastTick += stepInt;
-      step();
-      if (gameOver) break;
-    }
-    draw();
-  }
+      const stepInt = this.model.tickMs * (this.model.isBoosting() ? this.model.BOOST_TICK_MUL : 1);
+      if (now - this.lastTick < stepInt) break;
+      this.lastTick += stepInt;
 
-  function trySetDirection(nd) {
-    if (!difficultyChosen || gameOver || !running) return;
-    if (paused) return;
-    if (!opposite(nd, dir)) nextDir = nd;
-  }
+      const oldFood = { ...this.model.food };
+      const result = this.model.moveSnake();
 
-  function togglePause() {
-    if (!difficultyChosen || gameOver || !running) return;
-    paused = !paused;
-    if (paused) {
-      notePauseForObstacles();
-      boostKey = false;
-      boostPointer = false;
-      if (swipePointerId != null) {
-        try {
-          canvasWrap.releasePointerCapture(swipePointerId);
-        } catch (_) {}
-        swipePointerId = null;
+      if (result.gameOver) {
+        this.openGameOver(result.reason);
+        break;
       }
-      syncBoostUi();
-      sfxPause();
-      showOverlay("已暂停", "点击继续、按 P / Esc，或使用工具栏与下方按钮");
-    } else {
-      resumeObstacleAfterPause();
-      hideOverlay();
+
+      if (result.ate) {
+        const fcx = oldFood.x * this.view.CELL + this.view.CELL * 0.5;
+        const fcy = oldFood.y * this.view.CELL + this.view.CELL * 0.5;
+        this.model.spawnEatParticles(fcx, fcy);
+        this.view.updateScoreUI(this.model.score);
+        this.model.sfxEat();
+      }
     }
-    syncPauseLabels();
+
+    this.view.renderCanvas();
   }
 
-  function onKeyUp(e) {
-    const lk = e.key.toLowerCase();
-    if (lk === " " || lk === "spacebar") {
-      boostKey = false;
-      syncBoostUi();
-    }
-  }
-
-  function onKey(e) {
+  handleKeydown(e) {
     const lk = e.key.toLowerCase();
     const map = {
       arrowup: { x: 0, y: -1 },
@@ -1346,182 +1530,229 @@
       a: { x: -1, y: 0 },
       d: { x: 1, y: 0 },
     };
+
     if (lk === " " || lk === "spacebar") {
-      if (gameOver && document.activeElement === playerName) return;
-      if (!difficultyChosen || gameOver || !running) return;
+      if (this.model.gameOver && document.activeElement === this.view.playerName) return;
+      if (!this.model.difficultyChosen || this.model.gameOver || !this.model.running) return;
       if (e.repeat) return;
       e.preventDefault();
-      boostKey = true;
-      syncBoostUi();
-      resumeAudio();
+      this.model.boostKey = true;
+      this.view.syncBoostUi(this.model.isBoosting(), this.model.boostBarHeld);
+      this.model.resumeAudio();
       return;
     }
+
     if (lk === "p" || e.key === "Escape") {
-      if (gameOver && document.activeElement === playerName) return;
+      if (this.model.gameOver && document.activeElement === this.view.playerName) return;
       e.preventDefault();
-      if (gameOver) return;
-      if (!difficultyChosen || !running) return;
-      togglePause();
+      if (this.model.gameOver) return;
+      if (!this.model.difficultyChosen || !this.model.running) return;
+      this.togglePause();
       return;
     }
+
     if (lk === "r") {
       e.preventDefault();
-      resetGame();
+      this.resetGame();
       return;
     }
+
     const nd = map[lk] || map[e.key];
     if (!nd) return;
     e.preventDefault();
-    trySetDirection(nd);
+    this.trySetDirection(nd);
   }
 
-  function bindDirButton(el, vec) {
-    el.addEventListener(
-      "pointerdown",
-      (ev) => {
-        if (ev.pointerType === "mouse" && ev.button !== 0) return;
-        ev.preventDefault();
-        resumeAudio();
-        trySetDirection(vec);
-      },
-      { passive: false }
-    );
-  }
-
-  btnRestart.addEventListener("click", () => resetGame());
-  btnPause.addEventListener("click", () => {
-    resumeAudio();
-    togglePause();
-  });
-  btnOverlay.addEventListener("click", () => {
-    paused = false;
-    resumeObstacleAfterPause();
-    hideOverlay();
-    syncPauseLabels();
-  });
-  btnSound.addEventListener("click", () => {
-    soundMuted = !soundMuted;
-    localStorage.setItem(MUTE_KEY, soundMuted ? "1" : "0");
-    syncSoundButton();
-    if (!soundMuted) resumeAudio();
-  });
-  btnSaveLb.addEventListener("click", submitLeaderboard);
-  btnSkipLb.addEventListener("click", skipLeaderboard);
-
-  playerName.addEventListener("keydown", (e) => {
-    if (e.key === "Enter") {
-      e.preventDefault();
-      submitLeaderboard();
+  handleKeyup(e) {
+    const lk = e.key.toLowerCase();
+    if (lk === " " || lk === "spacebar") {
+      this.model.boostKey = false;
+      this.view.syncBoostUi(this.model.isBoosting(), this.model.boostBarHeld);
     }
-  });
+  }
 
-  document.querySelectorAll("[data-diff]").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      resumeAudio();
-      pickDifficulty(btn.getAttribute("data-diff"));
-    });
-  });
-
-  bindDirButton(touchUp, { x: 0, y: -1 });
-  bindDirButton(touchDown, { x: 0, y: 1 });
-  bindDirButton(touchLeft, { x: -1, y: 0 });
-  bindDirButton(touchRight, { x: 1, y: 0 });
-  touchPause.addEventListener(
-    "pointerdown",
-    (ev) => {
-      if (ev.pointerType === "mouse" && ev.button !== 0) return;
-      ev.preventDefault();
-      resumeAudio();
-      togglePause();
-    },
-    { passive: false }
-  );
-
-  function onWrapPointerDown(ev) {
+  onWrapPointerDown(ev) {
     if (ev.pointerType === "mouse" && ev.button !== 0) return;
-    if (!difficultyChosen || gameOver || !running) return;
-    resumeAudio();
-    boostPointer = true;
-    syncBoostUi();
-    swipePointerId = ev.pointerId;
-    swipeStartX = ev.clientX;
-    swipeStartY = ev.clientY;
-    try {
-      canvasWrap.setPointerCapture(ev.pointerId);
-    } catch (_) {}
-  }
-
-  function onWrapPointerMove(ev) {
-    if (swipePointerId !== ev.pointerId) return;
-    if (!running || paused || gameOver || !difficultyChosen) return;
-    const dx = ev.clientX - swipeStartX;
-    const dy = ev.clientY - swipeStartY;
-    const dist = Math.hypot(dx, dy);
-    if (dist < SWIPE_MIN_PX) return;
-    if (Math.abs(dx) >= Math.abs(dy)) {
-      trySetDirection({ x: dx > 0 ? 1 : -1, y: 0 });
-    } else {
-      trySetDirection({ x: 0, y: dy > 0 ? 1 : -1 });
+    if (!this.model.difficultyChosen || this.model.gameOver || !this.model.running) return;
+    this.model.resumeAudio();
+    if (ev.pointerType === "mouse") {
+      this.model.boostPointer = true;
+      this.view.syncBoostUi(this.model.isBoosting(), this.model.boostBarHeld);
     }
-    swipeStartX = ev.clientX;
-    swipeStartY = ev.clientY;
-  }
-
-  function onWrapPointerUp(ev) {
-    if (swipePointerId != null && ev.pointerId !== swipePointerId) return;
-    boostPointer = false;
-    swipePointerId = null;
-    syncBoostUi();
+    this.swipePointerId = ev.pointerId;
+    this.swipeStartX = ev.clientX;
+    this.swipeStartY = ev.clientY;
     try {
-      canvasWrap.releasePointerCapture(ev.pointerId);
+      this.view.canvasWrap.setPointerCapture(ev.pointerId);
     } catch (_) {}
   }
 
-  canvasWrap.addEventListener("pointerdown", onWrapPointerDown, { passive: false });
-  canvasWrap.addEventListener("pointermove", onWrapPointerMove);
-  canvasWrap.addEventListener("pointerup", onWrapPointerUp);
-  canvasWrap.addEventListener("pointercancel", onWrapPointerUp);
-  canvasWrap.addEventListener("lostpointercapture", onWrapPointerUp);
-
-  window.addEventListener("blur", () => {
-    boostKey = false;
-    syncBoostUi();
-  });
-  window.addEventListener("keydown", onKey);
-  window.addEventListener("keyup", onKeyUp);
-  window.addEventListener("resize", () => {
-    applyCanvasResolution();
-    syncTouchHint();
-  });
-  if (typeof ResizeObserver !== "undefined") {
-    const ro = new ResizeObserver(() => {
-      applyCanvasResolution();
-    });
-    ro.observe(canvasWrap);
-  }
-  ["click", "touchstart"].forEach((ev) => {
-    document.body.addEventListener(ev, () => resumeAudio(), { passive: true });
-  });
-
-  if (!CanvasRenderingContext2D.prototype.roundRect) {
-    CanvasRenderingContext2D.prototype.roundRect = function (x, y, w, h, r) {
-      const rr = Math.min(r, w / 2, h / 2);
-      this.moveTo(x + rr, y);
-      this.arcTo(x + w, y, x + w, y + h, rr);
-      this.arcTo(x + w, y + h, x, y + h, rr);
-      this.arcTo(x, y + h, x, y, rr);
-      this.arcTo(x, y, x + w, y, rr);
-      this.closePath();
-    };
+  onWrapPointerMove(ev) {
+    if (this.swipePointerId !== ev.pointerId) return;
+    if (!this.model.running || this.model.paused || this.model.gameOver || !this.model.difficultyChosen) return;
+    const dx = ev.clientX - this.swipeStartX;
+    const dy = ev.clientY - this.swipeStartY;
+    const dist = Math.hypot(dx, dy);
+    if (dist < this.model.SWIPE_MIN_PX) return;
+    if (Math.abs(dx) >= Math.abs(dy)) {
+      this.trySetDirection({ x: dx > 0 ? 1 : -1, y: 0 });
+    } else {
+      this.trySetDirection({ x: 0, y: dy > 0 ? 1 : -1 });
+    }
+    this.swipeStartX = ev.clientX;
+    this.swipeStartY = ev.clientY;
   }
 
-  syncSoundButton();
-  renderLeaderboard();
-  syncTouchHint();
-  syncPauseLabels();
-  resetGame();
-  requestAnimationFrame(loop);
-})();
+  onWrapPointerUp(ev) {
+    if (this.swipePointerId != null && ev.pointerId !== this.swipePointerId) return;
+    this.model.boostPointer = false;
+    this.swipePointerId = null;
+    this.view.syncBoostUi(this.model.isBoosting(), this.model.boostBarHeld);
+    try {
+      this.view.canvasWrap.releasePointerCapture(ev.pointerId);
+    } catch (_) {}
+  }
+
+  onBoostBarDown(ev) {
+    if (ev.pointerType === "mouse" && ev.button !== 0) return;
+    if (!this.model.difficultyChosen || this.model.gameOver || !this.model.running || this.model.paused) return;
+    ev.preventDefault();
+    this.model.resumeAudio();
+    this.model.boostBarHeld = true;
+    this.boostBarPointerId = ev.pointerId;
+    this.view.syncBoostUi(this.model.isBoosting(), true);
+    try {
+      this.view.boostBar.setPointerCapture(ev.pointerId);
+    } catch (_) {}
+  }
+
+  onBoostBarUp(ev) {
+    if (this.boostBarPointerId != null && ev.pointerId !== this.boostBarPointerId) return;
+    this.model.boostBarHeld = false;
+    this.boostBarPointerId = null;
+    this.view.syncBoostUi(this.model.isBoosting(), false);
+    try {
+      this.view.boostBar.releasePointerCapture(ev.pointerId);
+    } catch (_) {}
+  }
+
+  trySetDirection(nd) {
+    if (!this.model.difficultyChosen || this.model.gameOver || !this.model.running) return;
+    if (this.model.paused) return;
+    if (!this.model.opposite(nd, this.model.dir)) this.model.nextDir = nd;
+  }
+
+  togglePause() {
+    if (!this.model.difficultyChosen || this.model.gameOver || !this.model.running) return;
+    this.model.paused = !this.model.paused;
+    if (this.model.paused) {
+      this.model.notePauseForObstacles();
+      this.model.boostKey = false;
+      this.model.boostPointer = false;
+      this.model.boostBarHeld = false;
+      if (this.boostBarPointerId != null && this.view.boostBar) {
+        try { this.view.boostBar.releasePointerCapture(this.boostBarPointerId); } catch (_) {}
+        this.boostBarPointerId = null;
+      }
+      if (this.swipePointerId != null) {
+        try { this.view.canvasWrap.releasePointerCapture(this.swipePointerId); } catch (_) {}
+        this.swipePointerId = null;
+      }
+      this.view.syncBoostUi(false, false);
+      this.model.sfxPause();
+      this.view.showPauseScreen("已暂停", "点击继续、按 P / Esc，或使用工具栏与下方按钮");
+    } else {
+      this.model.resumeObstacleAfterPause();
+      this.view.hideOverlay();
+    }
+    this.view.syncPauseLabels(this.model.paused);
+  }
+
+  pickDifficulty(key) {
+    if (!this.model.DIFF[key]) return;
+    this.model.currentDifficulty = key;
+    this.model.difficultyChosen = true;
+    this.view.updateDiffLabel(this.model.DIFF_NAMES[key]);
+    this.resetGame();
+  }
+
+  resetGame() {
+    this.model.resetGameData();
+    this.view.updateScoreUI(0);
+    this.view.syncBoostUi(false, false);
+    this.view.applyCanvasResolution();
+    this.model.setWorldSize(this.view.LOGICAL, this.view.CELL);
+    this.swipePointerId = null;
+    this.boostBarPointerId = null;
+
+    if (!this.model.difficultyChosen) {
+      this.view.updateHighScoreUI(this.model.loadBest());
+      this.view.showStartScreen();
+      this.view.syncPauseLabels(false);
+      return;
+    }
+
+    this.view.hideOverlay();
+    this.lastTick = performance.now();
+    this.lastRafTime = performance.now();
+    this.view.updateHighScoreUI(this.model.loadBest());
+    this.model.sfxStart();
+    this.view.syncPauseLabels(false);
+    this.model.startObstacleSpawner();
+  }
+
+  openGameOver(reason) {
+    this.model.stopObstacleSpawner();
+    this.model.boostKey = false;
+    this.model.boostPointer = false;
+    this.model.boostBarHeld = false;
+    if (this.boostBarPointerId != null && this.view.boostBar) {
+      try { this.view.boostBar.releasePointerCapture(this.boostBarPointerId); } catch (_) {}
+      this.boostBarPointerId = null;
+    }
+    if (this.swipePointerId != null) {
+      try { this.view.canvasWrap.releasePointerCapture(this.swipePointerId); } catch (_) {}
+      this.swipePointerId = null;
+    }
+    this.view.syncBoostUi(false, false);
+    const newBest = this.model.updateHighScore(this.model.score);
+    this.view.updateHighScoreUI(newBest);
+    this.model.sfxDie();
+    this.model.pendingLbScore = this.model.score;
+    this.view.showGameOverScreen(reason, this.model.score);
+    this.view.syncPauseLabels(false);
+    this.view.playerName.value = localStorage.getItem("snake-last-name") || "";
+    this.view.focusPlayerName();
+  }
+
+  submitLeaderboard() {
+    if (this.model.pendingLbScore == null) return;
+    const name = (this.view.playerName.value || "匿名").trim() || "匿名";
+    localStorage.setItem("snake-last-name", name.slice(0, 12));
+    const row = { name: name.slice(0, 12), score: this.model.pendingLbScore, ts: Date.now() };
+    const rows = this.model.loadLeaderboard();
+    rows.push(row);
+    rows.sort((a, b) => b.score - a.score);
+    this.model.saveLeaderboard(rows);
+    this.view.renderLeaderboard(rows);
+    this.model.pendingLbScore = null;
+    this.returnToDifficultySelect();
+  }
+
+  skipLeaderboard() {
+    this.model.pendingLbScore = null;
+    this.returnToDifficultySelect();
+  }
+
+  returnToDifficultySelect() {
+    this.model.difficultyChosen = false;
+    this.view.hideDiffPill();
+    this.resetGame();
+  }
+}
+
+const app = new SnakeController();
+app.init();
   </script>
 </body>
 </html>
