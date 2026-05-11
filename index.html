@@ -1664,6 +1664,7 @@ class SnakeController {
     } else {
       this.model.resumeObstacleAfterPause();
       this.view.hideOverlay();
+      this.lastTick = performance.now(); //新增关键行
     }
     this.view.syncPauseLabels(this.model.paused);
   }
