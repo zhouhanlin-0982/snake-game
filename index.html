@@ -1651,12 +1651,12 @@
           this.model.resumeAudio();
           this.togglePause();
         });
-        this.view.btnOverlay.addEventListener("click", () => {
-          this.model.paused = false;
-          this.model.resumeObstacleAfterPause();
-          this.view.hideOverlay();
-          this.view.syncPauseLabels(false);
-        });
+        this.view.btnOverlay.addEventListener("pointerdown", (ev) => {
+          if (!this.model.paused) return;
+          ev.stopPropagation();
+          ev.preventDefault();
+          this.togglePause();
+        }, { passive: false });
         this.view.btnSound.addEventListener("click", () => {
           this.model.soundMuted = !this.model.soundMuted;
           localStorage.setItem(this.model.MUTE_KEY, this.model.soundMuted ? "1" : "0");
