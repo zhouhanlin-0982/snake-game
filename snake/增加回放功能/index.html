@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <title>Snake · 贪吃蛇</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="shell">
+    <header>
+      <div class="brand">
+        <h1>贪吃蛇</h1>
+        <p>霓虹画布 · 三控操作 · 粒子爆发 · 本地纪录 · 全局回放</p>
+      </div>
+      <div class="toolbar">
+        <div class="pill"><span class="dot" aria-hidden="true"></span>得分 <strong id="score">0</strong></div>
+        <div class="pill">纪录 <strong id="best">0</strong></div>
+        <div class="pill" id="pillDifficulty" hidden>难度 <strong class="diff-label" id="diffLabel">—</strong></div>
+        <button type="button" class="btn-ghost" id="btnPause">暂停</button>
+        <button type="button" class="btn-ghost" id="btnSound" aria-pressed="false">音效：开</button>
+        <button type="button" class="btn-primary" id="btnRestart">重新开始</button>
+      </div>
+    </header>
+
+    <div class="game-card">
+      <!-- 画布区域：内部只保留 canvas 和 overlay -->
+      <div class="canvas-wrap" id="canvasWrap">
+        <canvas id="game" width="360" height="360" aria-label="贪吃蛇游戏画布"></canvas>
+
+        <div class="overlay visible" id="overlay" role="dialog" aria-modal="true" aria-labelledby="diffTitle">
+          <div class="overlay-page" id="pageDifficulty">
+            <h2 id="diffTitle">选择难度</h2>
+            <p class="sub">简单节奏最慢，困难节奏最快；可随时用「重新开始」重开一局</p>
+            <div class="diff-grid">
+              <button type="button" class="btn-primary" data-diff="easy" id="btnDiffEasy">简单</button>
+              <button type="button" class="btn-primary" data-diff="normal" id="btnDiffNormal">普通</button>
+              <button type="button" class="btn-primary" data-diff="hard" id="btnDiffHard">困难</button>
+            </div>
+          </div>
+          <div class="overlay-page" id="pageStandard" hidden>
+            <h2 id="overlayTitle">暂停</h2>
+            <p class="sub" id="overlayMsg">点击继续或按 P</p>
+            <div class="overlay-actions" id="overlayDefaultActions">
+              <button type="button" class="btn-primary" id="btnOverlay">继续</button>
+            </div>
+          </div>
+          <div class="overlay-page" id="overlayGameOver" hidden>
+            <h2 id="overlayTitleGo" style="margin:0 0 0.35rem;font-size:1.35rem;font-weight:600;">游戏结束</h2>
+            <p class="sub" id="goScoreLine"></p>
+            <div class="name-row">
+              <label for="playerName">昵称（上榜用）</label>
+              <input id="playerName" type="text" maxlength="12" placeholder="例如 Nova" autocomplete="off" enterkeyhint="done" />
+            </div>
+            <div class="overlay-actions">
+              <button type="button" class="btn-primary" id="btnReplay" hidden>回放本局</button>
+              <button type="button" class="btn-primary" id="btnSaveLb">保存成绩</button>
+              <button type="button" class="btn-ghost" id="btnSkipLb">跳过</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 回放 HUD：移到画布外部，不再遮挡场景 -->
+      <div class="replay-hud" id="replayHud" hidden>
+        <div class="replay-hud-row">
+          <span class="replay-status" id="replayStatus">回放 0 / 0</span>
+          <span class="replay-speed" id="replaySpeedLabel">1.0x</span>
+        </div>
+        <div class="replay-progress">
+          <div class="replay-progress-bar" id="replayProgressBar" style="width:0%"></div>
+        </div>
+        <div class="replay-actions">
+          <button type="button" class="btn-ghost" id="btnReplayPause">暂停</button>
+          <button type="button" class="btn-ghost" id="btnReplayStop">退出</button>
+          <button type="button" class="btn-ghost" id="btnReplaySlow">0.5x</button>
+          <button type="button" class="btn-ghost" id="btnReplayFast">2.0x</button>
+        </div>
+      </div>
+
+      <div class="boost-bar" id="boostBar" role="button" tabindex="0" aria-label="按住此处加速">
+        <span class="boost-bar-inner">按住加速</span>
+      </div>
+      <div class="touch-pad" id="touchPad" aria-label="方向与暂停">
+        <button type="button" class="touch-btn touch-up" id="touchUp" aria-label="向上">↑</button>
+        <button type="button" class="touch-btn touch-left" id="touchLeft" aria-label="向左">←</button>
+        <button type="button" class="touch-btn touch-primary touch-pause" id="touchPause" aria-label="暂停或继续">暂停</button>
+        <button type="button" class="touch-btn touch-right" id="touchRight" aria-label="向右">→</button>
+        <button type="button" class="touch-btn touch-down" id="touchDown" aria-label="向下">↓</button>
+      </div>
+      <p class="controls-hint" id="controlsHint">
+        键盘 <span class="kbd">↑↓←→</span> / <span class="kbd">WASD</span>
+        · 画布上滑动转向
+        · <span class="kbd">Space</span> 按住加速
+        · <span class="kbd">P</span> 暂停 · <span class="kbd">Esc</span> 暂停 · <span class="kbd">R</span> 重开
+        <span id="controlsHintTouch" hidden><br />触控：虚拟方向键 + 在画面上滑动转向；按住下方半透明条加速</span>
+      </p>
+    </div>
+
+    <aside class="side">
+      <div class="panel">
+        <div class="panel-head">
+          <h3>排行榜</h3>
+          <span>TOP 10 · 本机</span>
+        </div>
+        <table class="lb-table" id="lbTable" aria-label="本地排行榜">
+          <thead>
+            <tr><th>#</th><th>玩家</th><th style="text-align:right">分数</th></tr>
+          </thead>
+          <tbody id="lbBody"></tbody>
+        </table>
+        <p class="lb-empty" id="lbEmpty" style="display:none;">暂无记录<br />结束一局即可上榜</p>
+      </div>
+    </aside>
+  </div>
+
+  <script src="model.js"></script>
+  <script src="view.js"></script>
+  <script src="controller.js"></script>
+</body>
+</html>
